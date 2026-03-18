@@ -23,6 +23,8 @@ export default function SettingsModal({ user, onClose }) {
   const [fields, setFields] = useState({
     openai_api_key: "",
     slack_webhook_url: "",
+    discord_webhook_url: "",
+    telegram_bot_token: "",
     notion_api_key: "",
     sendgrid_api_key: "",
   });
@@ -107,6 +109,24 @@ export default function SettingsModal({ user, onClose }) {
               value={fields.slack_webhook_url || ""}
               onChange={e => set("slack_webhook_url", e.target.value)}
               placeholder="https://hooks.slack.com/services/..."
+              style={inputStyle}
+            />
+
+            <label style={labelStyle}>Discord Webhook URL</label>
+            <input
+              type="text"
+              value={fields.discord_webhook_url || ""}
+              onChange={e => set("discord_webhook_url", e.target.value)}
+              placeholder="https://discord.com/api/webhooks/..."
+              style={inputStyle}
+            />
+
+            <label style={labelStyle}>Telegram Bot Token</label>
+            <input
+              type="password"
+              value={fields.telegram_bot_token || ""}
+              onChange={e => set("telegram_bot_token", e.target.value)}
+              placeholder="123456:ABC-DEF..."
               style={inputStyle}
             />
 

@@ -304,11 +304,61 @@ const NODE_EXECUTORS = {
     return { output };
   },
 
+  slack: async (node, input, ctx) => {
+    const webhookUrl = node.config?.webhook_url || ctx?.userSettings?.slack_webhook_url;
+    if (!webhookUrl) throw new Error("Slack Webhook URL이 없습니다. 노드 설정 또는 ⚙ 설정에서 입력하세요.");
+    const message = resolveTemplate(node.config?.message || "{{input.result}}", input);
+    const body = { text: message };
+    if (node.config?.channel) body.channel = node.config.channel;
+    const res = await fetch(webhookUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Slack 전송 실패: ${res.status}`);
+    return { output: { sent: true, platform: "slack", message } };
+  },
+
+  discord: async (node, input, ctx) => {
+    const webhookUrl = node.config?.webhook_url || ctx?.userSettings?.discord_webhook_url;
+    if (!webhookUrl) throw new Error("Discord Webhook URL이 없습니다. 노드 설정 또는 ⚙ 설정에서 입력하세요.");
+    const message = resolveTemplate(node.config?.message || "{{input.result}}", input);
+    const res = await fetch(webhookUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: message, username: node.config?.username || "FlowAgent" }),
+    });
+    if (!res.ok) throw new Error(`Discord 전송 실패: ${res.status}`);
+    return { output: { sent: true, platform: "discord", message } };
+  },
+
+  telegram: async (node, input, ctx) => {
+    const token = node.config?.bot_token || ctx?.userSettings?.telegram_bot_token;
+    const chatId = node.config?.chat_id;
+    if (!token) throw new Error("Telegram Bot Token이 없습니다. 노드 설정 또는 ⚙ 설정에서 입력하세요.");
+    if (!chatId) throw new Error("Telegram Chat ID가 없습니다. 노드 설정에서 입력하세요.");
+    const message = resolveTemplate(node.config?.message || "{{input.result}}", input);
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "Markdown" }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(`Telegram 전송 실패: ${data.description}`);
+    return { output: { sent: true, platform: "telegram", message } };
+  },
+
   output: async (node, input) => {
     await sleep(200 + rand(200));
     return { output: { delivered: true, data: input } };
   },
 };
+
+function resolveTemplate(template, input) {
+  if (!template || !input) return String(template || "");
+  return template.replace(/\{\{([^}]+)\}\}/g, (_, path) => {
+    const keys = path.trim().split(".");
+    let val = input;
+    for (const k of keys) { val = val?.[k]; }
+    return val !== undefined ? String(val) : `{{${path}}}`;
+  });
+}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function rand(n) { return Math.random() * n; }

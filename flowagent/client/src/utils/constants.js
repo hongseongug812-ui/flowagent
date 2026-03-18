@@ -4,6 +4,9 @@ export const NODE_TYPES = {
   api_call:  { label: "API Call",   icon: "🔗", color: "#3B82F6", desc: "외부 API 호출" },
   condition: { label: "조건 분기",   icon: "◇",  color: "#EC4899", desc: "조건에 따라 분기" },
   transform: { label: "데이터 변환", icon: "⚙",  color: "#10B981", desc: "데이터 가공/변환" },
+  slack:     { label: "Slack",      icon: "💬", color: "#4A154B", desc: "Slack 메시지 전송" },
+  discord:   { label: "Discord",    icon: "🎮", color: "#5865F2", desc: "Discord 메시지 전송" },
+  telegram:  { label: "Telegram",   icon: "✈️", color: "#26A5E4", desc: "Telegram 메시지 전송" },
   output:    { label: "Output",     icon: "📤", color: "#EF4444", desc: "결과 출력" },
 };
 

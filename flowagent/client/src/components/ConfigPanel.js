@@ -171,6 +171,88 @@ export default function ConfigPanel({ node, onUpdate, onClose }) {
         </>
       )}
 
+      {node.type === "slack" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Webhook URL</label>
+          <input
+            value={node.config?.webhook_url || ""}
+            onChange={(e) => set("webhook_url", e.target.value)}
+            placeholder="https://hooks.slack.com/services/... (비워두면 설정값 사용)"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>메시지</label>
+          <textarea
+            value={node.config?.message || "{{input.result}}"}
+            onChange={(e) => set("message", e.target.value)}
+            rows={4}
+            placeholder="{{input.result}} — 이전 노드 출력 참조 가능"
+            style={{ ...inputStyle, resize: "vertical", fontSize: 11, lineHeight: 1.5 }}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>채널 (선택)</label>
+          <input
+            value={node.config?.channel || ""}
+            onChange={(e) => set("channel", e.target.value)}
+            placeholder="#general"
+            style={inputStyle}
+          />
+        </>
+      )}
+
+      {node.type === "discord" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Webhook URL</label>
+          <input
+            value={node.config?.webhook_url || ""}
+            onChange={(e) => set("webhook_url", e.target.value)}
+            placeholder="https://discord.com/api/webhooks/..."
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>메시지</label>
+          <textarea
+            value={node.config?.message || "{{input.result}}"}
+            onChange={(e) => set("message", e.target.value)}
+            rows={4}
+            placeholder="{{input.result}} — 이전 노드 출력 참조 가능"
+            style={{ ...inputStyle, resize: "vertical", fontSize: 11, lineHeight: 1.5 }}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Bot 이름 (선택)</label>
+          <input
+            value={node.config?.username || "FlowAgent"}
+            onChange={(e) => set("username", e.target.value)}
+            placeholder="FlowAgent"
+            style={inputStyle}
+          />
+        </>
+      )}
+
+      {node.type === "telegram" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Bot Token</label>
+          <input
+            type="password"
+            value={node.config?.bot_token || ""}
+            onChange={(e) => set("bot_token", e.target.value)}
+            placeholder="123456:ABC-... (비워두면 설정값 사용)"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Chat ID</label>
+          <input
+            value={node.config?.chat_id || ""}
+            onChange={(e) => set("chat_id", e.target.value)}
+            placeholder="-1001234567890 또는 @채널명"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>메시지</label>
+          <textarea
+            value={node.config?.message || "{{input.result}}"}
+            onChange={(e) => set("message", e.target.value)}
+            rows={4}
+            placeholder="{{input.result}} — 이전 노드 출력 참조 가능"
+            style={{ ...inputStyle, resize: "vertical", fontSize: 11, lineHeight: 1.5 }}
+          />
+        </>
+      )}
+
       <div style={{ marginTop: 8, padding: "10px 12px", background: "#0D0D1A", borderRadius: 8, fontSize: 10, color: "#555" }}>
         <div>ID: {node.id}</div>
         <div>Type: {node.type}</div>
