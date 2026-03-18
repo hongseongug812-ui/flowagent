@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { WS_URL } from "../utils/constants";
+import { toast } from "../utils/toast";
 
 export function useWebSocket() {
   const wsRef = useRef(null);
@@ -56,10 +57,15 @@ export function useWebSocket() {
         case "execution:complete":
           setRunState(prev => ({ ...prev, running: false, current: null }));
           setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), msg: `━━ 완료 (${msg.duration}ms, ${msg.nodeCount}개 노드) ━━`, color: "#F59E0B" }]);
+          toast.success(`실행 완료! (${msg.duration}ms)`);
           break;
         case "execution:error":
           setRunState(prev => ({ ...prev, running: false, current: null }));
           setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), msg: `━━ 실행 실패: ${msg.error} ━━`, color: "#EF4444" }]);
+          toast.error(`실행 실패: ${msg.error}`);
+          break;
+        case "error":
+          toast.error(msg.message || "오류가 발생했습니다");
           break;
         default: break;
       }

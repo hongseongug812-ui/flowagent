@@ -22,6 +22,7 @@ const sectionTitle = {
 export default function SettingsModal({ user, onClose }) {
   const [fields, setFields] = useState({
     openai_api_key: "",
+    anthropic_api_key: "",
     slack_webhook_url: "",
     slack_channel_id: "",
     discord_webhook_url: "",
@@ -99,6 +100,18 @@ export default function SettingsModal({ user, onClose }) {
               placeholder="sk-proj-..."
               style={inputStyle}
             />
+
+            <label style={labelStyle}>Anthropic (Claude) API Key</label>
+            <input
+              type="password"
+              value={fields.anthropic_api_key || ""}
+              onChange={e => set("anthropic_api_key", e.target.value)}
+              placeholder="sk-ant-api03-..."
+              style={inputStyle}
+            />
+            <div style={{ fontSize: 11, color: "#444", marginTop: 4 }}>
+              AI 비서에서 Claude 모델 사용 시 필요합니다.
+            </div>
 
             {/* 메시지/알림 */}
             <div style={{ ...sectionTitle, marginTop: 28 }}>메시지 & 알림</div>

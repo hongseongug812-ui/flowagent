@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import { NODE_TYPES } from "../utils/constants";
+import { toast } from "../utils/toast";
 
 const inputStyle = {
   width: "100%", padding: "8px 10px", background: "#1A1A2E",
@@ -8,11 +9,31 @@ const inputStyle = {
   outline: "none", boxSizing: "border-box",
 };
 
-export default function ConfigPanel({ node, onUpdate, onClose }) {
+export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
   if (!node) return null;
   const t = NODE_TYPES[node.type];
+  const [webhookUrl, setWebhookUrl] = useState(null);
+  const [generatingWebhook, setGeneratingWebhook] = useState(false);
 
   const set = (key, val) => onUpdate(node.id, key, val);
+
+  const generateWebhook = async () => {
+    if (!workflowId) { toast.warn("먼저 워크플로우를 저장하세요"); return; }
+    setGeneratingWebhook(true);
+    try {
+      const token = localStorage.getItem("fa_token");
+      const res = await fetch(`/api/workflows/${workflowId}/webhook`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      const url = `${window.location.origin}${data.webhookUrl}`;
+      setWebhookUrl(url);
+      await navigator.clipboard.writeText(url);
+      toast.success("웹훅 URL이 클립보드에 복사됐습니다!");
+    } catch { toast.error("웹훅 URL 생성 실패"); }
+    setGeneratingWebhook(false);
+  };
 
   return (
     <div style={{
@@ -83,6 +104,35 @@ export default function ConfigPanel({ node, onUpdate, onClose }) {
             <option value="manual">수동 실행</option>
             <option value="email">이메일 수신</option>
           </select>
+
+          {node.config?.triggerType === "webhook" && (
+            <div style={{ marginBottom: 14 }}>
+              {webhookUrl ? (
+                <>
+                  <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>웹훅 URL (POST로 요청)</div>
+                  <div style={{
+                    padding: "7px 10px", background: "#0D0D1A", borderRadius: 6,
+                    border: "1px solid #16a34a", fontSize: 10, color: "#4ade80",
+                    wordBreak: "break-all", marginBottom: 6,
+                  }}>{webhookUrl}</div>
+                  <button onClick={() => { navigator.clipboard.writeText(webhookUrl); toast.success("복사됐습니다!"); }} style={{
+                    width: "100%", padding: "6px", background: "#052e16",
+                    border: "1px solid #16a34a", borderRadius: 6,
+                    color: "#4ade80", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                  }}>📋 다시 복사</button>
+                </>
+              ) : (
+                <button onClick={generateWebhook} disabled={generatingWebhook} style={{
+                  width: "100%", padding: "8px",
+                  background: generatingWebhook ? "#111" : "#0D1225",
+                  border: "1px solid #3b82f6", borderRadius: 6,
+                  color: "#60a5fa", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                }}>
+                  {generatingWebhook ? "생성 중..." : "🔗 웹훅 URL 생성 & 복사"}
+                </button>
+              )}
+            </div>
+          )}
 
           {node.config?.triggerType === "schedule" && (
             <>
@@ -250,6 +300,73 @@ export default function ConfigPanel({ node, onUpdate, onClose }) {
             placeholder="{{input.result}} — 이전 노드 출력 참조 가능"
             style={{ ...inputStyle, resize: "vertical", fontSize: 11, lineHeight: 1.5 }}
           />
+        </>
+      )}
+
+      {node.type === "notion" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Database ID</label>
+          <input
+            value={node.config?.database_id || ""}
+            onChange={(e) => set("database_id", e.target.value)}
+            placeholder="32자리 Notion Database ID"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>페이지 제목</label>
+          <input
+            value={node.config?.title || "{{input.result}}"}
+            onChange={(e) => set("title", e.target.value)}
+            placeholder="{{input.result}}"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>내용 (선택)</label>
+          <textarea
+            value={node.config?.content || ""}
+            onChange={(e) => set("content", e.target.value)}
+            rows={3}
+            placeholder="{{input.result}}"
+            style={{ ...inputStyle, resize: "vertical", fontSize: 11 }}
+          />
+          <div style={{ fontSize: 10, color: "#555", marginBottom: 14 }}>
+            API 키는 ⚙ 설정 → Notion API Key에서 입력하세요
+          </div>
+        </>
+      )}
+
+      {node.type === "email" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>받는 사람</label>
+          <input
+            value={node.config?.to || ""}
+            onChange={(e) => set("to", e.target.value)}
+            placeholder="user@example.com 또는 {{input.email}}"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>제목</label>
+          <input
+            value={node.config?.subject || "FlowAgent 알림"}
+            onChange={(e) => set("subject", e.target.value)}
+            placeholder="이메일 제목"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>내용</label>
+          <textarea
+            value={node.config?.body || "{{input.result}}"}
+            onChange={(e) => set("body", e.target.value)}
+            rows={4}
+            placeholder="{{input.result}}"
+            style={{ ...inputStyle, resize: "vertical", fontSize: 11, lineHeight: 1.5 }}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>보내는 사람 (선택)</label>
+          <input
+            value={node.config?.from || ""}
+            onChange={(e) => set("from", e.target.value)}
+            placeholder="noreply@yourdomain.com"
+            style={inputStyle}
+          />
+          <div style={{ fontSize: 10, color: "#555", marginBottom: 14 }}>
+            API 키는 ⚙ 설정 → SendGrid API Key에서 입력하세요
+          </div>
         </>
       )}
 

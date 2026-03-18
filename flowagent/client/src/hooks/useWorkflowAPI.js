@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { API_BASE } from "../utils/constants";
+import { toast } from "../utils/toast";
 
 function authHeaders() {
   const token = localStorage.getItem("fa_token");
@@ -46,8 +47,9 @@ export function useWorkflowAPI() {
       });
       const data = await res.json();
       if (!currentId) setCurrentId(data.id);
+      toast.success("저장됐습니다");
       return data;
-    } catch { return null; }
+    } catch { toast.error("저장 실패"); return null; }
     finally { setSaving(false); }
   }, [currentId]);
 

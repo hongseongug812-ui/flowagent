@@ -5,6 +5,7 @@ const { WebSocketServer } = require("ws");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
 const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
 const fetch = require("node-fetch");
 const { JSONPath } = require("jsonpath-plus");
 
@@ -199,6 +200,66 @@ app.put("/api/settings", authMiddleware, (req, res) => {
   }
   db.saveSettings(req.user.id, merged);
   res.json({ ok: true });
+});
+
+// ── AI Chat (personal assistant) ──────────────────────────────
+app.post("/api/chat", authMiddleware, async (req, res) => {
+  const { messages, model, systemPrompt } = req.body;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "messages required" });
+  }
+
+  const userSettings = db.getSettings(req.user.id);
+  const isAnthropic = model && model.startsWith("claude");
+
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering
+  res.flushHeaders();
+
+  const sysMsg = systemPrompt ||
+    "당신은 FlowAgent의 AI 개인 비서입니다. 워크플로우 자동화, 생산성, 기술적인 질문에 특화되어 있습니다. 친절하고 간결하게 한국어로 답변하세요.";
+
+  try {
+    if (isAnthropic) {
+      const apiKey = userSettings.anthropic_api_key || process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        res.write("[오류] Anthropic API 키가 없습니다. ⚙ 설정에서 Claude API Key를 입력하세요.");
+        return res.end();
+      }
+      const anthropic = new Anthropic({ apiKey });
+      const stream = anthropic.messages.stream({
+        model: model || "claude-opus-4-6",
+        max_tokens: 2048,
+        system: sysMsg,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+      });
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          res.write(event.delta.text);
+        }
+      }
+    } else {
+      const apiKey = userSettings.openai_api_key || process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        res.write("[오류] OpenAI API 키가 없습니다. ⚙ 설정에서 OpenAI API Key를 입력하세요.");
+        return res.end();
+      }
+      const client = new OpenAI({ apiKey });
+      const stream = await client.chat.completions.create({
+        model: model || "gpt-4o",
+        stream: true,
+        messages: [{ role: "system", content: sysMsg }, ...messages],
+      });
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || "";
+        if (text) res.write(text);
+      }
+    }
+    res.end();
+  } catch (e) {
+    res.write(`\n[오류] ${e.message}`);
+    res.end();
+  }
 });
 
 // PUT /api/workflows/:id/schedule — enable/disable cron
@@ -408,6 +469,9 @@ const NODE_EXECUTORS = {
 
   ai_agent: async (node, input, ctx) => {
     const userKey = ctx?.userSettings?.openai_api_key;
+    if (!userKey && !process.env.OPENAI_API_KEY) {
+      throw new Error("OpenAI API 키가 없습니다. ⚙ 설정 → OpenAI API Key를 입력하세요.");
+    }
     const client = userKey ? new OpenAI({ apiKey: userKey }) : openai;
     const model = node.config?.model === "gpt-4o" || !node.config?.model?.startsWith("claude")
       ? (node.config?.model || OPENAI_MODEL)
@@ -435,17 +499,25 @@ const NODE_EXECUTORS = {
   },
 
   api_call: async (node, input) => {
-    const url = node.config?.url || "https://api.example.com";
+    const url = node.config?.url;
+    if (!url || url.trim() === "" || url === "https://api.example.com") {
+      throw new Error("API URL이 설정되지 않았습니다. 노드를 클릭해 URL을 입력하세요.");
+    }
     const method = (node.config?.method || "GET").toUpperCase();
     const headers = node.config?.headers ? JSON.parse(node.config.headers) : {};
     const hasBody = method !== "GET" && method !== "HEAD";
 
     const start = Date.now();
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json", ...headers },
-      ...(hasBody && input ? { body: JSON.stringify(input) } : {}),
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json", ...headers },
+        ...(hasBody && input ? { body: JSON.stringify(input) } : {}),
+      });
+    } catch (e) {
+      throw new Error(`API 호출 실패: ${e.message} (URL: ${url})`);
+    }
     const responseTime = Date.now() - start;
     let body;
     const ct = res.headers.get("content-type") || "";
@@ -453,6 +525,9 @@ const NODE_EXECUTORS = {
       body = ct.includes("application/json") ? await res.json() : await res.text();
     } catch {
       body = await res.text();
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} 오류: ${typeof body === "string" ? body.slice(0, 200) : JSON.stringify(body).slice(0, 200)}`);
     }
     return { output: { status: res.status, url, method, responseTime, body } };
   },
@@ -527,6 +602,59 @@ const NODE_EXECUTORS = {
     const data = await res.json();
     if (!data.ok) throw new Error(`Telegram 전송 실패: ${data.description}`);
     return { output: { sent: true, platform: "telegram", message } };
+  },
+
+  notion: async (node, input, ctx) => {
+    const apiKey = node.config?.api_key || ctx?.userSettings?.notion_api_key;
+    if (!apiKey) throw new Error("Notion API 키가 없습니다. ⚙ 설정 → Notion API Key를 입력하세요.");
+    const databaseId = node.config?.database_id;
+    if (!databaseId) throw new Error("Notion Database ID가 필요합니다. 노드 설정에서 입력하세요.");
+    const title = resolveTemplate(node.config?.title || "{{input.result}}", input);
+    const content = resolveTemplate(node.config?.content || "", input);
+    const res = await fetch("https://api.notion.com/v1/pages", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+      },
+      body: JSON.stringify({
+        parent: { database_id: databaseId },
+        properties: { title: { title: [{ text: { content: title } }] } },
+        children: content ? [{ object: "block", type: "paragraph", paragraph: { rich_text: [{ text: { content } }] } }] : [],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Notion 오류: ${err.message || res.status}`);
+    }
+    const data = await res.json();
+    return { output: { pageId: data.id, url: data.url, title } };
+  },
+
+  email: async (node, input, ctx) => {
+    const apiKey = node.config?.api_key || ctx?.userSettings?.sendgrid_api_key;
+    if (!apiKey) throw new Error("SendGrid API 키가 없습니다. ⚙ 설정 → SendGrid API Key를 입력하세요.");
+    const to = resolveTemplate(node.config?.to || "", input);
+    if (!to) throw new Error("받는 사람 이메일 주소가 필요합니다.");
+    const subject = resolveTemplate(node.config?.subject || "FlowAgent 알림", input);
+    const body = resolveTemplate(node.config?.body || "{{input.result}}", input);
+    const from = node.config?.from || "noreply@flowagent.app";
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: from },
+        subject,
+        content: [{ type: "text/plain", value: body }],
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.status);
+      throw new Error(`SendGrid 오류 (${res.status}): ${String(text).slice(0, 200)}`);
+    }
+    return { output: { sent: true, to, subject } };
   },
 
   output: async (node, input) => {
@@ -684,6 +812,13 @@ wss.on("connection", (ws) => {
           if (!msg.workflowId) {
             ws.send(JSON.stringify({ type: "error", message: "workflowId required" }));
             return;
+          }
+          {
+            const runUser = db.getUserById(ws.userId);
+            if (runUser && runUser.plan === "free" && runUser.run_count >= 100) {
+              ws.send(JSON.stringify({ type: "error", message: "무료 플랜 실행 한도(100회)를 초과했습니다. Pro로 업그레이드하세요." }));
+              return;
+            }
           }
           executeWorkflow(msg.workflowId, ws.userId, ws);
           break;

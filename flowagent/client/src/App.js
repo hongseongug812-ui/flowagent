@@ -11,6 +11,10 @@ import LogPanel from "./components/LogPanel";
 import AuthModal from "./components/AuthModal";
 import SettingsModal from "./components/SettingsModal";
 import CalendarModal from "./components/CalendarModal";
+import HistoryModal from "./components/HistoryModal";
+import ChatModal from "./components/ChatModal";
+import ToastContainer from "./components/Toast";
+import { toast } from "./utils/toast";
 
 function uid() {
   return "n" + Math.random().toString(36).slice(2, 8);
@@ -35,6 +39,9 @@ export default function App() {
   const [showConfig, setShowConfig] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [workflowName, setWorkflowName] = useState("Untitled Workflow");
 
   const canvasRef = useRef(null);
@@ -42,9 +49,14 @@ export default function App() {
   const { connected, runState, logs, runWorkflow, clearLogs } = useWebSocket();
   const api = useWorkflowAPI();
 
-  // Load saved workflows on mount
+  // Load saved workflows on mount; show onboarding if first time
   useEffect(() => {
-    if (user) api.fetchWorkflows();
+    if (!user) return;
+    api.fetchWorkflows().then(list => {
+      if (Array.isArray(list) && list.length === 0 && !localStorage.getItem("fa_onboarded")) {
+        setShowOnboarding(true);
+      }
+    }).catch(() => {});
   }, [user]); // eslint-disable-line
 
   // ── Drag ────────────────────────────────────────────────────
@@ -206,8 +218,19 @@ export default function App() {
 
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", overflow: "hidden" }}>
+      <ToastContainer />
       {showSettings && <SettingsModal user={user} onClose={() => setShowSettings(false)} />}
       {showCalendar && <CalendarModal onClose={() => setShowCalendar(false)} />}
+      {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
+      {showChat && <ChatModal onClose={() => setShowChat(false)} onCreateWorkflow={(wf) => {
+        setNodes(wf.nodes);
+        setEdges(wf.edges);
+        setWorkflowName(wf.name);
+        api.newWorkflow();
+        setShowChat(false);
+        toast.success(`"${wf.name}" 워크플로우가 생성됐습니다!`);
+      }} />}
+      {showOnboarding && <OnboardingOverlay onClose={() => { localStorage.setItem("fa_onboarded", "1"); setShowOnboarding(false); }} />}
       {/* Sidebar */}
       <Sidebar
         onAddNode={addNode}
@@ -250,6 +273,20 @@ export default function App() {
           <span style={{ fontSize: 11, color: user.plan === "free" ? "#F59E0B" : "#8B5CF6" }}>
             {user.plan === "free" ? "Free" : "Pro"}
           </span>
+          <button onClick={() => setShowChat(true)} style={{
+            padding: "4px 10px",
+            background: "linear-gradient(135deg, #8B5CF622, #6D28D922)",
+            border: "1px solid #8B5CF655",
+            borderRadius: 5, color: "#C4B5FD", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            🤖 AI 비서
+          </button>
+          <button onClick={() => setShowHistory(true)} style={{
+            padding: "4px 10px", background: "none", border: "1px solid #333",
+            borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            📋 히스토리
+          </button>
           <button onClick={() => setShowCalendar(true)} style={{
             padding: "4px 10px", background: "none", border: "1px solid #333",
             borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
@@ -367,12 +404,67 @@ export default function App() {
               node={selectedNode}
               onUpdate={updateNodeConfig}
               onClose={() => setShowConfig(false)}
+              workflowId={api.currentId}
             />
           )}
         </div>
 
         {/* Logs */}
         <LogPanel logs={logs} onClear={clearLogs} />
+      </div>
+    </div>
+  );
+}
+
+function OnboardingOverlay({ onClose }) {
+  const steps = [
+    { icon: "➕", title: "노드 추가", desc: "왼쪽 사이드바에서 노드를 드래그하거나 클릭해 캔버스에 추가하세요." },
+    { icon: "🔗", title: "노드 연결", desc: "노드 오른쪽 점을 드래그해 다른 노드와 연결하면 실행 흐름이 만들어집니다." },
+    { icon: "⚙", title: "노드 설정", desc: "노드를 클릭하면 상단에 '설정' 버튼이 나타납니다. URL, 프롬프트 등을 입력하세요." },
+    { icon: "▶", title: "실행", desc: "사이드바 하단 '▶ 실행' 버튼을 누르면 워크플로우가 실행되고 로그가 표시됩니다." },
+    { icon: "📅", title: "일정 & 알림", desc: "상단 '일정' 버튼으로 리마인더를 추가하고 텔레그램/슬랙/디코로 알림을 받으세요." },
+  ];
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 2000, padding: 24,
+    }}>
+      <div style={{
+        background: "#111128", border: "1px solid #8B5CF644",
+        borderRadius: 20, width: "100%", maxWidth: 520, padding: 32,
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>👋</div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>FlowAgent에 오신 걸 환영해요!</div>
+          <div style={{ fontSize: 13, color: "#666" }}>AI 워크플로우를 5분 만에 만들어보세요.</div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "flex-start", gap: 14,
+              padding: "12px 14px", background: "#0D0D22", borderRadius: 10,
+              border: "1px solid #1A1A3A",
+            }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>{s.icon}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{s.title}</div>
+                <div style={{ fontSize: 12, color: "#666", lineHeight: 1.5 }}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={onClose} style={{
+          width: "100%", padding: "14px 0",
+          background: "linear-gradient(135deg, #8B5CF6, #6D28D9)",
+          border: "none", borderRadius: 10, color: "#fff",
+          fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+        }}>
+          시작하기 →
+        </button>
       </div>
     </div>
   );

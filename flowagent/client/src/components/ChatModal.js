@@ -1,0 +1,437 @@
+import React, { useState, useRef, useEffect, useCallback } from "react";
+
+function getToken() { return localStorage.getItem("fa_token"); }
+
+const MODELS = [
+  { value: "gpt-4o",                label: "GPT-4o",          provider: "openai",    color: "#10B981" },
+  { value: "gpt-4o-mini",           label: "GPT-4o mini",     provider: "openai",    color: "#10B981" },
+  { value: "claude-opus-4-6",       label: "Claude Opus 4.6", provider: "anthropic", color: "#C084FC" },
+  { value: "claude-sonnet-4-6",     label: "Claude Sonnet",   provider: "anthropic", color: "#C084FC" },
+  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku", provider: "anthropic", color: "#C084FC" },
+];
+
+const SUGGESTIONS = [
+  "슬랙에 매일 아침 뉴스 요약 보내는 워크플로우 만들어줘",
+  "고객 문의 자동 분류 워크플로우 만들어줘",
+  "API Call 노드 사용법 알려줘",
+  "트리거 종류에는 뭐가 있어?",
+];
+
+// 응답에서 ```workflow {...} ``` 블록 파싱
+function parseWorkflowBlock(text) {
+  const match = text.match(/```workflow\s*([\s\S]*?)```/);
+  if (!match) return null;
+  try {
+    const wf = JSON.parse(match[1].trim());
+    if (!wf.nodes || !wf.edges || !wf.name) return null;
+    // 노드에 기본 좌표 보정
+    wf.nodes = wf.nodes.map((n, i) => ({
+      ...n,
+      x: n.x || 80 + i * 320,
+      y: n.y || 200,
+    }));
+    return wf;
+  } catch { return null; }
+}
+
+const WORKFLOW_SYSTEM = `당신은 FlowAgent의 AI 개인 비서입니다. 워크플로우 자동화 전문가입니다.
+
+워크플로우를 만들어달라는 요청이 있으면, 설명 후 반드시 아래 형식의 JSON 블록을 포함하세요:
+\`\`\`workflow
+{"name":"워크플로우 이름","nodes":[{"id":"n1","type":"타입","x":80,"y":200,"config":{...}}],"edges":[["n1","n2"]]}
+\`\`\`
+
+사용 가능한 노드 타입:
+- trigger: 트리거 (config: name, triggerType: "webhook"|"schedule"|"manual")
+- ai_agent: AI 처리 (config: name, model: "gpt-4o"|"claude-sonnet-4-6", prompt)
+- api_call: API 호출 (config: name, url, method: "GET"|"POST")
+- condition: 조건 분기 (config: name, expression, operator: "exists"|"equals"|"contains")
+- transform: 데이터 변환 (config: name, code)
+- slack: Slack 메시지 (config: name, message)
+- discord: Discord 메시지 (config: name, message)
+- telegram: Telegram 메시지 (config: name, message, chat_id)
+- notion: Notion 페이지 생성 (config: name, database_id, title, content)
+- email: 이메일 발송 (config: name, to, subject, body)
+- output: 출력 (config: name)
+
+노드 x좌표는 320씩 증가, y는 200 고정으로 설정하세요. 친절하게 한국어로 답변하세요.`;
+
+export default function ChatModal({ onClose, onCreateWorkflow }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [model, setModel] = useState(MODELS[0].value);
+  const [streaming, setStreaming] = useState(false);
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [showSystem, setShowSystem] = useState(false);
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+  const abortRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!streaming) inputRef.current?.focus();
+  }, [streaming]);
+
+  const send = useCallback(async (text) => {
+    const userText = (text || input).trim();
+    if (!userText || streaming) return;
+    setInput("");
+
+    const userMsg = { role: "user", content: userText };
+    const history = [...messages, userMsg];
+    setMessages([...history, { role: "assistant", content: "", streaming: true }]);
+    setStreaming(true);
+
+    abortRef.current = new AbortController();
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({
+          messages: history,
+          model,
+          systemPrompt: systemPrompt || WORKFLOW_SYSTEM,
+        }),
+        signal: abortRef.current.signal,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        setMessages(prev => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", content: `[오류] ${err.error}`, streaming: false };
+          return next;
+        });
+        setStreaming(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        accumulated += decoder.decode(value, { stream: true });
+        const snapshot = accumulated;
+        setMessages(prev => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", content: snapshot, streaming: true };
+          return next;
+        });
+      }
+
+      setMessages(prev => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", content: accumulated, streaming: false };
+        return next;
+      });
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        setMessages(prev => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", content: `[연결 오류] ${e.message}`, streaming: false };
+          return next;
+        });
+      }
+    }
+    setStreaming(false);
+  }, [input, messages, model, streaming, systemPrompt]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    setMessages(prev => {
+      const next = [...prev];
+      if (next[next.length - 1]?.streaming) {
+        next[next.length - 1] = { ...next[next.length - 1], streaming: false };
+      }
+      return next;
+    });
+    setStreaming(false);
+  };
+
+  const handleClear = () => { setMessages([]); };
+
+  const currentModel = MODELS.find(m => m.value === model) || MODELS[0];
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 1000, padding: 16,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#111128", border: "1px solid #222244",
+        borderRadius: 18, width: "100%", maxWidth: 680,
+        height: "88vh", display: "flex", flexDirection: "column",
+        overflow: "hidden",
+      }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "14px 20px", borderBottom: "1px solid #1A1A3A", flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 18 }}>🤖</span>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>AI 개인 비서</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Model selector */}
+            <select
+              value={model}
+              onChange={e => setModel(e.target.value)}
+              style={{
+                background: "#0D0D22", border: "1px solid #2A2A4A",
+                borderRadius: 8, color: currentModel.color,
+                fontSize: 11, fontFamily: "inherit", padding: "4px 8px",
+                outline: "none", cursor: "pointer",
+              }}
+            >
+              {MODELS.map(m => (
+                <option key={m.value} value={m.value} style={{ color: m.color }}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowSystem(s => !s)}
+              title="시스템 프롬프트 설정"
+              style={{
+                background: showSystem ? "#1A1A3A" : "none", border: "1px solid #2A2A4A",
+                borderRadius: 6, color: "#666", cursor: "pointer",
+                fontSize: 13, padding: "4px 8px",
+              }}
+            >⚙</button>
+            <button
+              onClick={handleClear}
+              title="대화 초기화"
+              style={{
+                background: "none", border: "1px solid #2A2A4A",
+                borderRadius: 6, color: "#666", cursor: "pointer",
+                fontSize: 12, padding: "4px 8px", fontFamily: "inherit",
+              }}
+            >새 대화</button>
+            <button onClick={onClose} style={{
+              background: "none", border: "none",
+              color: "#555", cursor: "pointer", fontSize: 18,
+            }}>✕</button>
+          </div>
+        </div>
+
+        {/* System prompt panel */}
+        {showSystem && (
+          <div style={{ padding: "12px 20px", borderBottom: "1px solid #1A1A3A", flexShrink: 0, background: "#0D0D1A" }}>
+            <div style={{ fontSize: 11, color: "#666", marginBottom: 6 }}>시스템 프롬프트 (AI 성격/역할 설정)</div>
+            <textarea
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              placeholder="기본: FlowAgent 전문 AI 비서. 여기에 다른 역할을 입력하세요."
+              rows={2}
+              style={{
+                width: "100%", background: "#1A1A2E", border: "1px solid #333",
+                borderRadius: 8, color: "#C4C4E0", fontSize: 12,
+                fontFamily: "inherit", padding: "8px 10px",
+                outline: "none", resize: "none", boxSizing: "border-box",
+              }}
+            />
+          </div>
+        )}
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+          {messages.length === 0 ? (
+            <div style={{ paddingTop: 32 }}>
+              <div style={{ textAlign: "center", marginBottom: 32 }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>무엇이든 물어보세요</div>
+                <div style={{ fontSize: 12, color: "#555" }}>
+                  워크플로우 자동화, AI 활용, 기술 질문 등<br />
+                  <span style={{ color: currentModel.color }}>{currentModel.label}</span>이 답변합니다
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {SUGGESTIONS.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => send(s)}
+                    style={{
+                      padding: "12px 14px", background: "#0D0D22",
+                      border: "1px solid #1A1A3A", borderRadius: 10,
+                      color: "#888", fontSize: 12, cursor: "pointer",
+                      textAlign: "left", fontFamily: "inherit",
+                      transition: "border-color 0.15s",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = "#8B5CF6"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = "#1A1A3A"}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg, i) => (
+              <MessageBubble key={i} msg={msg} onCreateWorkflow={onCreateWorkflow} />
+            ))
+          )}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* Input */}
+        <div style={{
+          padding: "12px 16px", borderTop: "1px solid #1A1A3A", flexShrink: 0,
+        }}>
+          <div style={{
+            display: "flex", gap: 8, alignItems: "flex-end",
+            background: "#0D0D22", border: "1px solid #2A2A4A",
+            borderRadius: 12, padding: "8px 10px",
+          }}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="메시지를 입력하세요... (Shift+Enter: 줄바꿈)"
+              rows={1}
+              style={{
+                flex: 1, background: "none", border: "none",
+                color: "#E0E0F0", fontSize: 13, fontFamily: "inherit",
+                outline: "none", resize: "none", lineHeight: 1.5,
+                maxHeight: 120, overflowY: "auto",
+              }}
+              onInput={e => {
+                e.target.style.height = "auto";
+                e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+              }}
+              disabled={streaming}
+            />
+            {streaming ? (
+              <button
+                onClick={handleStop}
+                style={{
+                  padding: "6px 12px", background: "#3A1A1A",
+                  border: "1px solid #F87171", borderRadius: 8,
+                  color: "#F87171", fontSize: 12, cursor: "pointer",
+                  fontFamily: "inherit", flexShrink: 0,
+                }}
+              >⏹ 중지</button>
+            ) : (
+              <button
+                onClick={() => send()}
+                disabled={!input.trim()}
+                style={{
+                  padding: "6px 14px",
+                  background: input.trim()
+                    ? "linear-gradient(135deg, #8B5CF6, #6D28D9)"
+                    : "#1A1A2E",
+                  border: "none", borderRadius: 8,
+                  color: input.trim() ? "#fff" : "#333",
+                  fontSize: 13, cursor: input.trim() ? "pointer" : "default",
+                  fontFamily: "inherit", fontWeight: 700, flexShrink: 0,
+                  transition: "background 0.15s",
+                }}
+              >↑ 전송</button>
+            )}
+          </div>
+          <div style={{ fontSize: 10, color: "#333", textAlign: "center", marginTop: 6 }}>
+            {currentModel.provider === "anthropic" ? "Claude" : "OpenAI"} · API 키는 ⚙ 설정에서 입력 · Enter로 전송
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ msg, onCreateWorkflow }) {
+  const isUser = msg.role === "user";
+  const workflow = (!isUser && !msg.streaming) ? parseWorkflowBlock(msg.content || "") : null;
+
+  // Replace ```workflow...``` block with a cleaner visual
+  const displayContent = (msg.content || "").replace(/```workflow[\s\S]*?```/g, "");
+
+  return (
+    <div style={{
+      display: "flex", justifyContent: isUser ? "flex-end" : "flex-start",
+      marginBottom: 12,
+    }}>
+      {!isUser && (
+        <div style={{
+          width: 28, height: 28, borderRadius: "50%",
+          background: "linear-gradient(135deg, #8B5CF6, #6D28D9)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, flexShrink: 0, marginRight: 8, marginTop: 2,
+        }}>🤖</div>
+      )}
+      <div style={{ maxWidth: "78%" }}>
+        <div style={{
+          padding: "10px 14px",
+          borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+          background: isUser ? "linear-gradient(135deg, #8B5CF6, #6D28D9)" : "#0D0D22",
+          border: isUser ? "none" : "1px solid #1A1A3A",
+          color: isUser ? "#fff" : "#D0D0E8",
+          fontSize: 13, lineHeight: 1.65,
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+        }}>
+          {(isUser ? msg.content : displayContent) || (msg.streaming ? <BlinkCursor /> : "")}
+          {msg.streaming && msg.content && <BlinkCursor />}
+        </div>
+        {workflow && onCreateWorkflow && (
+          <div style={{
+            marginTop: 8, padding: "12px 14px",
+            background: "linear-gradient(135deg, #1a0a3a, #0d1225)",
+            border: "1px solid #8B5CF6",
+            borderRadius: "0 12px 12px 12px",
+          }}>
+            <div style={{ fontSize: 11, color: "#C4B5FD", marginBottom: 8, fontWeight: 700 }}>
+              ✨ 워크플로우 생성 준비됨: <span style={{ color: "#fff" }}>{workflow.name}</span>
+            </div>
+            <div style={{ fontSize: 10, color: "#666", marginBottom: 10 }}>
+              {workflow.nodes.length}개 노드 · {workflow.edges.length}개 연결
+              ({workflow.nodes.map(n => n.type).join(", ")})
+            </div>
+            <button onClick={() => onCreateWorkflow(workflow)} style={{
+              width: "100%", padding: "9px",
+              background: "linear-gradient(135deg, #8B5CF6, #6D28D9)",
+              border: "none", borderRadius: 8,
+              color: "#fff", fontSize: 12, fontWeight: 700,
+              cursor: "pointer", fontFamily: "inherit",
+            }}>
+              🚀 캔버스에 워크플로우 생성
+            </button>
+          </div>
+        )}
+      </div>
+      {isUser && (
+        <div style={{
+          width: 28, height: 28, borderRadius: "50%",
+          background: "#1A1A3A",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 13, flexShrink: 0, marginLeft: 8, marginTop: 2,
+        }}>👤</div>
+      )}
+    </div>
+  );
+}
+
+function BlinkCursor() {
+  return (
+    <span style={{
+      display: "inline-block", width: 2, height: 14,
+      background: "#8B5CF6", marginLeft: 2, verticalAlign: "middle",
+      animation: "blink 1s step-end infinite",
+    }} />
+  );
+}
