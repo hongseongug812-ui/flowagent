@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:4000/api/workflows)",
+      "Bash(netstat -ano)",
+      "Read(//c/Users/ppp54/Downloads/flowagent-mvp/flowagent/server/**)"
+    ]
+  }
+}

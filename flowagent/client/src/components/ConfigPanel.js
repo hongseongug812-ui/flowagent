@@ -370,6 +370,28 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
         </>
       )}
 
+      {node.type === "rss_feed" && (
+        <>
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>RSS/Atom URL</label>
+          <input
+            value={node.config?.url || ""}
+            onChange={(e) => set("url", e.target.value)}
+            placeholder="https://example.com/feed.xml"
+            style={inputStyle}
+          />
+          <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>가져올 항목 수 (최대)</label>
+          <input
+            type="number" min="1" max="20"
+            value={node.config?.limit || 5}
+            onChange={(e) => set("limit", parseInt(e.target.value))}
+            style={inputStyle}
+          />
+          <div style={{ fontSize: 10, color: "#555", marginBottom: 14 }}>
+            출력: items[].title, items[].link, items[].pubDate, items[].description
+          </div>
+        </>
+      )}
+
       <div style={{ marginTop: 8, padding: "10px 12px", background: "#0D0D1A", borderRadius: 8, fontSize: 10, color: "#555" }}>
         <div>ID: {node.id}</div>
         <div>Type: {node.type}</div>

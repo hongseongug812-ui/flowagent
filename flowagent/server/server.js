@@ -81,6 +81,19 @@ app.delete("/api/workflows/:id", authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// POST /api/workflows/:id/duplicate — 복제
+app.post("/api/workflows/:id/duplicate", authMiddleware, (req, res) => {
+  const original = db.getWorkflow(req.params.id);
+  if (!original || original.userId !== req.user.id) return res.status(404).json({ error: "Not found" });
+  const copy = db.createWorkflow({
+    name: original.name + " (복사)",
+    nodes: original.nodes,
+    edges: original.edges,
+    userId: req.user.id,
+  });
+  res.status(201).json(copy);
+});
+
 app.get("/api/executions", authMiddleware, (req, res) => {
   res.json(db.listExecutions(req.user.id));
 });
@@ -602,6 +615,41 @@ const NODE_EXECUTORS = {
     const data = await res.json();
     if (!data.ok) throw new Error(`Telegram 전송 실패: ${data.description}`);
     return { output: { sent: true, platform: "telegram", message } };
+  },
+
+  rss_feed: async (node) => {
+    const url = node.config?.url;
+    if (!url) throw new Error("RSS URL이 필요합니다. 노드 설정에서 입력하세요.");
+    let res;
+    try {
+      res = await fetch(url, { headers: { "User-Agent": "FlowAgent/1.0" } });
+    } catch (e) {
+      throw new Error(`RSS 가져오기 실패: ${e.message}`);
+    }
+    if (!res.ok) throw new Error(`RSS HTTP 오류: ${res.status}`);
+    const xml = await res.text();
+
+    // Simple RSS/Atom parser (no deps)
+    const items = [];
+    const isAtom = xml.includes("<feed");
+    const entryTag = isAtom ? "entry" : "item";
+    const re = new RegExp(`<${entryTag}[\\s>]([\\s\\S]*?)</${entryTag}>`, "g");
+    const getText = (str, tag) => {
+      const m = str.match(new RegExp(`<${tag}(?:[^>]*)><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>|<${tag}(?:[^>]*)>([\\s\\S]*?)</${tag}>`, "i"));
+      return (m?.[1] || m?.[2] || "").trim();
+    };
+    let match;
+    while ((match = re.exec(xml)) !== null) {
+      const raw = match[1];
+      const title = getText(raw, "title");
+      const link = getText(raw, isAtom ? "id" : "link") || (raw.match(/<link[^>]+href="([^"]+)"/)?.[1] || "");
+      const pubDate = getText(raw, isAtom ? "updated" : "pubDate");
+      const description = getText(raw, isAtom ? "summary" : "description").replace(/<[^>]+>/g, "").slice(0, 300);
+      if (title) items.push({ title, link, pubDate, description });
+    }
+    const limit = node.config?.limit || 5;
+    const result = items.slice(0, limit);
+    return { output: { items: result, count: result.length, total: items.length, url } };
   },
 
   notion: async (node, input, ctx) => {

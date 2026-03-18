@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function getToken() { return localStorage.getItem("fa_token"); }
 
@@ -383,10 +385,38 @@ function MessageBubble({ msg, onCreateWorkflow }) {
           border: isUser ? "none" : "1px solid #1A1A3A",
           color: isUser ? "#fff" : "#D0D0E8",
           fontSize: 13, lineHeight: 1.65,
-          whiteSpace: "pre-wrap", wordBreak: "break-word",
+          wordBreak: "break-word",
         }}>
-          {(isUser ? msg.content : displayContent) || (msg.streaming ? <BlinkCursor /> : "")}
-          {msg.streaming && msg.content && <BlinkCursor />}
+          {isUser ? (
+            <span style={{ whiteSpace: "pre-wrap" }}>{msg.content}</span>
+          ) : displayContent ? (
+            <>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  p: ({ children }) => <p style={{ margin: "0 0 8px 0" }}>{children}</p>,
+                  ul: ({ children }) => <ul style={{ margin: "4px 0 8px 16px", padding: 0 }}>{children}</ul>,
+                  ol: ({ children }) => <ol style={{ margin: "4px 0 8px 16px", padding: 0 }}>{children}</ol>,
+                  li: ({ children }) => <li style={{ marginBottom: 2 }}>{children}</li>,
+                  h1: ({ children }) => <div style={{ fontSize: 15, fontWeight: 800, margin: "8px 0 4px" }}>{children}</div>,
+                  h2: ({ children }) => <div style={{ fontSize: 14, fontWeight: 700, margin: "6px 0 4px", color: "#C4B5FD" }}>{children}</div>,
+                  h3: ({ children }) => <div style={{ fontSize: 13, fontWeight: 700, margin: "4px 0 2px", color: "#A78BFA" }}>{children}</div>,
+                  code: ({ inline, children }) => inline
+                    ? <code style={{ background: "#1A1A3A", padding: "1px 6px", borderRadius: 4, fontSize: 11, fontFamily: "monospace", color: "#C4B5FD" }}>{children}</code>
+                    : <pre style={{ background: "#060612", padding: "10px 12px", borderRadius: 8, overflow: "auto", fontSize: 11, margin: "6px 0", border: "1px solid #1A1A3A" }}><code style={{ fontFamily: "monospace", color: "#A0A0C0" }}>{children}</code></pre>,
+                  strong: ({ children }) => <strong style={{ color: "#E0E0F8", fontWeight: 700 }}>{children}</strong>,
+                  a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: "#8B5CF6", textDecoration: "underline" }}>{children}</a>,
+                  blockquote: ({ children }) => <blockquote style={{ borderLeft: "3px solid #8B5CF6", paddingLeft: 10, margin: "6px 0", color: "#888" }}>{children}</blockquote>,
+                  hr: () => <hr style={{ border: "none", borderTop: "1px solid #1A1A3A", margin: "8px 0" }} />,
+                }}
+              >
+                {displayContent}
+              </ReactMarkdown>
+              {msg.streaming && <BlinkCursor />}
+            </>
+          ) : (
+            msg.streaming ? <BlinkCursor /> : ""
+          )}
         </div>
         {workflow && onCreateWorkflow && (
           <div style={{

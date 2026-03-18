@@ -246,6 +246,7 @@ export default function App() {
         onSchedule={handleSchedule}
         currentWorkflowId={api.currentId}
         nodes={nodes}
+        onDuplicateWorkflow={api.duplicateWorkflow}
       />
 
       {/* Main area */}

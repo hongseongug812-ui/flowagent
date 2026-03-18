@@ -4,7 +4,7 @@ import { NODE_TYPES, TEMPLATES } from "../utils/constants";
 export default function Sidebar({
   onAddNode, onLoadTemplate, onRun, running,
   workflows, onLoadWorkflow, onNewWorkflow, onSave, saving, connected,
-  onSchedule, currentWorkflowId, nodes,
+  onSchedule, currentWorkflowId, nodes, onDuplicateWorkflow,
 }) {
   const [tab, setTab] = useState("nodes");
   const [showSchedule, setShowSchedule] = useState(false);
@@ -115,20 +115,37 @@ export default function Sidebar({
               + 새 워크플로우
             </button>
             {workflows.map((wf) => (
-              <button key={wf.id} onClick={() => onLoadWorkflow(wf.id)} style={{
-                width: "100%", padding: "12px 12px", marginBottom: 6,
-                background: "#1A1A2E", border: "1px solid #222244", borderRadius: 10,
-                cursor: "pointer", color: "#E0E0F0", fontFamily: "inherit", textAlign: "left",
-                fontSize: 12, transition: "border-color 0.2s",
-              }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#8B5CF6")}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#222244")}
+              <div key={wf.id} style={{ position: "relative", marginBottom: 6 }}
+                onMouseEnter={e => e.currentTarget.querySelector(".dup-btn").style.opacity = "1"}
+                onMouseLeave={e => e.currentTarget.querySelector(".dup-btn").style.opacity = "0"}
               >
-                <div style={{ fontWeight: 700, marginBottom: 2 }}>{wf.name}</div>
-                <div style={{ fontSize: 10, color: "#555" }}>
-                  {wf.nodeCount}개 노드 · {wf.edgeCount}개 연결
-                </div>
-              </button>
+                <button onClick={() => onLoadWorkflow(wf.id)} style={{
+                  width: "100%", padding: "12px 12px", paddingRight: 36,
+                  background: wf.id === currentWorkflowId ? "#1A1A3A" : "#1A1A2E",
+                  border: `1px solid ${wf.id === currentWorkflowId ? "#8B5CF6" : "#222244"}`,
+                  borderRadius: 10,
+                  cursor: "pointer", color: "#E0E0F0", fontFamily: "inherit", textAlign: "left",
+                  fontSize: 12, transition: "border-color 0.2s",
+                }}
+                  onMouseEnter={(e) => { if (wf.id !== currentWorkflowId) e.currentTarget.style.borderColor = "#8B5CF6"; }}
+                  onMouseLeave={(e) => { if (wf.id !== currentWorkflowId) e.currentTarget.style.borderColor = "#222244"; }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>{wf.name}</div>
+                  <div style={{ fontSize: 10, color: "#555" }}>
+                    {wf.nodeCount}개 노드 · {wf.edgeCount}개 연결
+                  </div>
+                </button>
+                <button
+                  className="dup-btn"
+                  onClick={(e) => { e.stopPropagation(); onDuplicateWorkflow?.(wf.id); }}
+                  title="복제"
+                  style={{
+                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                    background: "none", border: "none", color: "#555", cursor: "pointer",
+                    fontSize: 13, opacity: 0, transition: "opacity 0.15s", padding: 4,
+                  }}
+                >⧉</button>
+              </div>
             ))}
             {workflows.length === 0 && (
               <div style={{ fontSize: 11, color: "#444", textAlign: "center", marginTop: 20 }}>

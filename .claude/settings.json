@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/ppp54/Downloads/flowagent-mvp/flowagent/server/**)",
+      "Bash(curl -s -X POST http://localhost:4000/api/auth/register -H \"Content-Type: application/json\" -d '{\"\"\"\"email\"\"\"\":\"\"\"\"test@flowagent.io\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"test123\"\"\"\"}')",
+      "Bash(python -m json.tool)",
+      "Read(//c/Users/ppp54/.claude/projects/c--Users-ppp54-Downloads-flowagent-mvp/memory/**)",
+      "Bash(curl -s -X POST http://localhost:4000/api/waitlist -H \"Content-Type: application/json\" -d '{\"\"email\"\":\"\"test@example.com\"\"}')",
+      "Read(//c/Users/ppp54/Downloads/flowagent-mvp/**)",
+      "Bash(curl -s http://localhost:4000/api/waitlist/count)",
+      "Bash(npm install:*)",
+      "Bash(taskkill //PID 12492 //F)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\ppp54\\.claude\\projects\\c--Users-ppp54-Downloads-flowagent-mvp\\memory"
+    ]
+  }
+}

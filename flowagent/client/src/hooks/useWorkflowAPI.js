@@ -63,5 +63,18 @@ export function useWorkflowAPI() {
 
   const newWorkflow = useCallback(() => setCurrentId(null), []);
 
-  return { workflows, currentId, saving, fetchWorkflows, loadWorkflow, saveWorkflow, deleteWorkflow, newWorkflow };
+  const duplicateWorkflow = useCallback(async (id) => {
+    try {
+      const token = localStorage.getItem("fa_token");
+      const res = await fetch(`${API_BASE}/workflows/${id}/duplicate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error();
+      toast.success("워크플로우가 복제됐습니다");
+      await fetchWorkflows();
+    } catch { toast.error("복제 실패"); }
+  }, [fetchWorkflows]);
+
+  return { workflows, currentId, saving, fetchWorkflows, loadWorkflow, saveWorkflow, deleteWorkflow, newWorkflow, duplicateWorkflow };
 }

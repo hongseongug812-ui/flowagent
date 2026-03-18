@@ -7,6 +7,7 @@ export const NODE_TYPES = {
   slack:     { label: "Slack",      icon: "💬", color: "#4A154B", desc: "Slack 메시지 전송" },
   discord:   { label: "Discord",    icon: "🎮", color: "#5865F2", desc: "Discord 메시지 전송" },
   telegram:  { label: "Telegram",   icon: "✈️", color: "#26A5E4", desc: "Telegram 메시지 전송" },
+  rss_feed:  { label: "RSS 피드",   icon: "📡", color: "#F97316", desc: "RSS/Atom 피드 가져오기" },
   notion:    { label: "Notion",     icon: "📝", color: "#FFFFFF", desc: "Notion 페이지/DB 생성" },
   email:     { label: "이메일",     icon: "📧", color: "#F59E0B", desc: "SendGrid로 이메일 발송" },
   output:    { label: "Output",     icon: "📤", color: "#EF4444", desc: "결과 출력" },
