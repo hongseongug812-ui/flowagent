@@ -23,8 +23,11 @@ export default function SettingsModal({ user, onClose }) {
   const [fields, setFields] = useState({
     openai_api_key: "",
     slack_webhook_url: "",
+    slack_channel_id: "",
     discord_webhook_url: "",
+    discord_channel_id: "",
     telegram_bot_token: "",
+    telegram_chat_id: "",
     notion_api_key: "",
     sendgrid_api_key: "",
   });
@@ -127,6 +130,32 @@ export default function SettingsModal({ user, onClose }) {
               value={fields.telegram_bot_token || ""}
               onChange={e => set("telegram_bot_token", e.target.value)}
               placeholder="123456:ABC-DEF..."
+              style={inputStyle}
+            />
+            <label style={labelStyle}>Telegram Chat ID (일정 봇용)</label>
+            <input
+              type="text"
+              value={fields.telegram_chat_id || ""}
+              onChange={e => set("telegram_chat_id", e.target.value)}
+              placeholder="-1001234567890 (@userinfobot 에서 확인)"
+              style={inputStyle}
+            />
+
+            <label style={labelStyle}>Discord Channel ID (일정 봇용)</label>
+            <input
+              type="text"
+              value={fields.discord_channel_id || ""}
+              onChange={e => set("discord_channel_id", e.target.value)}
+              placeholder="채널 ID (우클릭 → ID 복사)"
+              style={inputStyle}
+            />
+
+            <label style={labelStyle}>Slack Channel ID (일정 봇용)</label>
+            <input
+              type="text"
+              value={fields.slack_channel_id || ""}
+              onChange={e => set("slack_channel_id", e.target.value)}
+              placeholder="C0123ABCDEF (채널 정보에서 확인)"
               style={inputStyle}
             />
 

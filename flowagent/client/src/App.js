@@ -10,6 +10,7 @@ import ConfigPanel from "./components/ConfigPanel";
 import LogPanel from "./components/LogPanel";
 import AuthModal from "./components/AuthModal";
 import SettingsModal from "./components/SettingsModal";
+import CalendarModal from "./components/CalendarModal";
 
 function uid() {
   return "n" + Math.random().toString(36).slice(2, 8);
@@ -33,6 +34,7 @@ export default function App() {
   const [connLine, setConnLine] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [workflowName, setWorkflowName] = useState("Untitled Workflow");
 
   const canvasRef = useRef(null);
@@ -205,6 +207,7 @@ export default function App() {
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", overflow: "hidden" }}>
       {showSettings && <SettingsModal user={user} onClose={() => setShowSettings(false)} />}
+      {showCalendar && <CalendarModal onClose={() => setShowCalendar(false)} />}
       {/* Sidebar */}
       <Sidebar
         onAddNode={addNode}
@@ -247,6 +250,12 @@ export default function App() {
           <span style={{ fontSize: 11, color: user.plan === "free" ? "#F59E0B" : "#8B5CF6" }}>
             {user.plan === "free" ? "Free" : "Pro"}
           </span>
+          <button onClick={() => setShowCalendar(true)} style={{
+            padding: "4px 10px", background: "none", border: "1px solid #333",
+            borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            📅 일정
+          </button>
           <button onClick={() => setShowSettings(true)} style={{
             padding: "4px 10px", background: "none", border: "1px solid #333",
             borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",

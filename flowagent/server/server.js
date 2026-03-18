@@ -213,6 +213,191 @@ app.put("/api/workflows/:id/schedule", authMiddleware, (req, res) => {
   res.json(wf);
 });
 
+// GET /api/schedules — 유저의 스케줄 목록 + 다음 실행 시간
+app.get("/api/schedules", authMiddleware, (req, res) => {
+  const workflows = db.listWorkflows(req.user.id).filter(wf => wf.scheduleCron);
+  const result = workflows.map(wf => {
+    let nextRun = null;
+    if (wf.scheduleEnabled && wf.scheduleCron && cron.validate(wf.scheduleCron)) {
+      try {
+        // Calculate next run using cronparser
+        const interval = require("cron-parser").parseExpression(wf.scheduleCron, {
+          tz: "Asia/Seoul",
+        });
+        nextRun = interval.next().toDate().toISOString();
+      } catch { /* ignore */ }
+    }
+    return {
+      id: wf.id,
+      name: wf.name,
+      cron: wf.scheduleCron,
+      enabled: wf.scheduleEnabled,
+      nextRun,
+      nodeCount: wf.nodes.length,
+    };
+  });
+  res.json(result);
+});
+
+// ── Reminders CRUD ────────────────────────────────────────────
+app.get("/api/reminders", authMiddleware, (req, res) => {
+  res.json(db.listReminders(req.user.id));
+});
+
+app.post("/api/reminders", authMiddleware, (req, res) => {
+  const { title, remindAt, platform, chatId } = req.body;
+  if (!title || !remindAt) return res.status(400).json({ error: "title과 remindAt 필요" });
+  const reminder = db.createReminder({ userId: req.user.id, title, remindAt, platform, chatId });
+  res.status(201).json(reminder);
+});
+
+app.delete("/api/reminders/:id", authMiddleware, (req, res) => {
+  db.deleteReminder(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// ── Bot webhooks (Telegram/Discord/Slack) → 일정 파싱 저장 ───
+async function parseReminderFromAI(text, settings) {
+  const apiKey = settings?.openai_api_key || process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  const client = new OpenAI({ apiKey });
+  const now = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  try {
+    const res = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{
+        role: "user",
+        content: `현재 시각: ${now} (서울)
+사용자 메시지: "${text}"
+
+이 메시지가 일정/알림 등록 요청이면 JSON으로 반환하세요:
+{"title": "일정 제목", "remind_at": "ISO8601 datetime (서울 시간 기준)"}
+
+일정 요청이 아니면: {"not_reminder": true}
+JSON만 반환, 설명 없이.`,
+      }],
+      temperature: 0,
+    });
+    return JSON.parse(res.choices[0].message.content.trim());
+  } catch { return null; }
+}
+
+// Telegram bot webhook
+app.post("/api/bot/telegram", async (req, res) => {
+  res.json({ ok: true }); // Telegram에 빠르게 응답
+  const update = req.body;
+  const msg = update.message || update.channel_post;
+  if (!msg?.text) return;
+  const chatId = String(msg.chat.id);
+  const text = msg.text;
+
+  // chatId로 유저 찾기 (settings에 telegram_chat_id 저장된 유저)
+  const users = db.findUsersByChatId("telegram", chatId);
+  if (!users.length) return;
+
+  for (const user of users) {
+    const settings = db.getSettings(user.id);
+    const token = settings?.telegram_bot_token;
+    if (!token) continue;
+
+    const parsed = await parseReminderFromAI(text, settings);
+    if (!parsed || parsed.not_reminder) {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: "❓ 일정 형식으로 입력해주세요.\n예: \"내일 오전 10시에 팀 미팅 알림해줘\"" }),
+      });
+      continue;
+    }
+
+    db.createReminder({ userId: user.id, title: parsed.title, remindAt: parsed.remind_at, platform: "telegram", chatId });
+    const remindDate = new Date(parsed.remind_at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: `✅ 일정 등록!\n📌 ${parsed.title}\n⏰ ${remindDate}` }),
+    });
+  }
+});
+
+// Discord bot webhook (interactions endpoint)
+app.post("/api/bot/discord", async (req, res) => {
+  const { type, data, channel_id } = req.body;
+  if (type === 1) return res.json({ type: 1 }); // PING
+  if (type === 2 && data?.name === "remind") { // slash command
+    const text = data.options?.[0]?.value || "";
+    const users = db.findUsersByChatId("discord", channel_id);
+    if (!users.length) return res.json({ type: 4, data: { content: "채널이 연결되지 않았습니다." } });
+
+    const user = users[0];
+    const settings = db.getSettings(user.id);
+    const parsed = await parseReminderFromAI(text, settings);
+    if (!parsed || parsed.not_reminder) {
+      return res.json({ type: 4, data: { content: "❓ 일정 형식으로 입력해주세요. 예: `내일 오전 10시 미팅`" } });
+    }
+    db.createReminder({ userId: user.id, title: parsed.title, remindAt: parsed.remind_at, platform: "discord", chatId: channel_id });
+    const remindDate = new Date(parsed.remind_at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+    return res.json({ type: 4, data: { content: `✅ **${parsed.title}** — ${remindDate} 알림 등록!` } });
+  }
+  res.json({ type: 4, data: { content: "알 수 없는 명령" } });
+});
+
+// Slack slash command (/remind)
+app.post("/api/bot/slack", async (req, res) => {
+  const { text, channel_id, user_id } = req.body;
+  const users = db.findUsersByChatId("slack", channel_id);
+  if (!users.length) return res.json({ text: "채널이 연결되지 않았습니다." });
+
+  const user = users[0];
+  const settings = db.getSettings(user.id);
+  const parsed = await parseReminderFromAI(text, settings);
+  if (!parsed || parsed.not_reminder) {
+    return res.json({ text: "❓ 일정 형식으로 입력해주세요. 예: `/remind 내일 오전 10시 팀 미팅`" });
+  }
+  db.createReminder({ userId: user.id, title: parsed.title, remindAt: parsed.remind_at, platform: "slack", chatId: channel_id });
+  const remindDate = new Date(parsed.remind_at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  res.json({ text: `✅ *${parsed.title}* — ${remindDate} 알림 등록!` });
+});
+
+// ── Reminder cron (매분 체크) ──────────────────────────────────
+cron.schedule("* * * * *", async () => {
+  const due = db.getDueReminders();
+  for (const reminder of due) {
+    try {
+      const settings = db.getSettings(reminder.user_id);
+      const msg = `⏰ 알림!\n📌 ${reminder.title}`;
+
+      if (reminder.platform === "telegram" && reminder.chat_id) {
+        const token = settings?.telegram_bot_token;
+        if (token) {
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: reminder.chat_id, text: msg }),
+          });
+        }
+      } else if (reminder.platform === "discord" && reminder.chat_id) {
+        const webhookUrl = settings?.discord_webhook_url;
+        if (webhookUrl) {
+          await fetch(webhookUrl, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: msg }),
+          });
+        }
+      } else if (reminder.platform === "slack" && reminder.chat_id) {
+        const webhookUrl = settings?.slack_webhook_url;
+        if (webhookUrl) {
+          await fetch(webhookUrl, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: msg }),
+          });
+        }
+      }
+      db.markReminderSent(reminder.id);
+      console.log(`[Reminder] Sent: ${reminder.title}`);
+    } catch (e) {
+      console.error(`[Reminder] Error: ${e.message}`);
+    }
+  }
+}, { timezone: "Asia/Seoul" });
+
 // ── Node executor (simulated, plug in real logic later) ──────
 
 const NODE_EXECUTORS = {

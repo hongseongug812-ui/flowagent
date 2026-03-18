@@ -51,6 +51,17 @@ db.exec(`
     email      TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS reminders (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    remind_at   TEXT NOT NULL,
+    platform    TEXT,
+    chat_id     TEXT,
+    sent        INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+  );
 `);
 
 // ── Apply migrations ─────────────────────────────────────────
@@ -226,6 +237,40 @@ module.exports = {
 
   // ── Plan ──────────────────────────────────────────────────
   upgradePlan(userId, plan) { stmts.upgradePlan.run(plan, userId); },
+
+  // ── Reminders ─────────────────────────────────────────────
+  createReminder({ userId, title, remindAt, platform, chatId }) {
+    const id = uuidv4();
+    db.prepare(
+      "INSERT INTO reminders (id, user_id, title, remind_at, platform, chat_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, userId, title, remindAt, platform || null, chatId || null, new Date().toISOString());
+    return db.prepare("SELECT * FROM reminders WHERE id = ?").get(id);
+  },
+  listReminders(userId) {
+    return db.prepare("SELECT * FROM reminders WHERE user_id = ? AND sent = 0 ORDER BY remind_at ASC").all(userId);
+  },
+  deleteReminder(id, userId) {
+    db.prepare("DELETE FROM reminders WHERE id = ? AND user_id = ?").run(id, userId);
+  },
+  getDueReminders() {
+    const now = new Date().toISOString();
+    return db.prepare("SELECT * FROM reminders WHERE remind_at <= ? AND sent = 0").all(now);
+  },
+  markReminderSent(id) {
+    db.prepare("UPDATE reminders SET sent = 1 WHERE id = ?").run(id);
+  },
+  // chatId로 유저 찾기 (settings JSON에 저장된 chat_id 매칭)
+  findUsersByChatId(platform, chatId) {
+    const allUsers = db.prepare("SELECT * FROM users").all();
+    return allUsers.filter(u => {
+      try {
+        const s = JSON.parse(u.settings || "{}");
+        if (platform === "telegram") return s.telegram_chat_id === chatId;
+        if (platform === "discord") return s.discord_channel_id === chatId;
+        if (platform === "slack")   return s.slack_channel_id === chatId;
+      } catch { return false; }
+    });
+  },
 
   // ── Settings ──────────────────────────────────────────────
   getSettings(userId) {
