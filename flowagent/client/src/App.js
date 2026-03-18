@@ -43,6 +43,12 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [workflowName, setWorkflowName] = useState("Untitled Workflow");
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const isPanning = useRef(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const spaceDown = useRef(false);
+  const [runCount, setRunCount] = useState(null);
 
   const canvasRef = useRef(null);
 
@@ -57,6 +63,12 @@ export default function App() {
         setShowOnboarding(true);
       }
     }).catch(() => {});
+    // Fetch run count for free plan users
+    const token = localStorage.getItem("fa_token");
+    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data.runCount !== undefined) setRunCount(data.runCount); })
+      .catch(() => {});
   }, [user]); // eslint-disable-line
 
   // ── Drag ────────────────────────────────────────────────────
@@ -65,30 +77,63 @@ export default function App() {
     if (!n) return;
     setDragging(id);
     const rect = canvasRef.current.getBoundingClientRect();
-    setDragOff({ x: e.clientX - rect.left - n.x, y: e.clientY - rect.top - n.y });
-  }, [nodes]);
+    setDragOff({
+      x: e.clientX - rect.left - n.x * zoom - pan.x,
+      y: e.clientY - rect.top - n.y * zoom - pan.y,
+    });
+  }, [nodes, zoom, pan]);
 
   const handleMouseMove = useCallback((e) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
+    if (isPanning.current) {
+      const dx = e.clientX - panStart.current.x;
+      const dy = e.clientY - panStart.current.y;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      setPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+      return;
+    }
     if (dragging) {
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
       setNodes((prev) =>
         prev.map((n) =>
           n.id === dragging
-            ? { ...n, x: e.clientX - rect.left - dragOff.x, y: e.clientY - rect.top - dragOff.y }
+            ? { ...n, x: (mx - dragOff.x - pan.x) / zoom, y: (my - dragOff.y - pan.y) / zoom }
             : n
         )
       );
     }
     if (connecting) {
-      setConnLine({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      setConnLine({ x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom });
     }
-  }, [dragging, connecting, dragOff]);
+  }, [dragging, connecting, dragOff, zoom, pan]);
 
   const handleMouseUp = useCallback(() => {
+    isPanning.current = false;
     setDragging(null);
     setConnecting(null);
     setConnLine(null);
+  }, []);
+
+  // ── Canvas pan (middle mouse or space+drag) ──────────────────
+  const handleCanvasMouseDown = useCallback((e) => {
+    if (e.button === 1 || (e.button === 0 && spaceDown.current)) {
+      e.preventDefault();
+      isPanning.current = true;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    setSelected(null);
+    setShowConfig(false);
+  }, []);
+
+  // ── Wheel zoom ───────────────────────────────────────────────
+  const handleWheel = useCallback((e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom((z) => Math.min(2, Math.max(0.3, z * delta)));
   }, []);
 
   // ── Connect ─────────────────────────────────────────────────
@@ -189,12 +234,68 @@ export default function App() {
     else alert(`스케줄 ${enabled ? "활성화" : "비활성화"} 완료`);
   };
 
+  // ── Export / Import ─────────────────────────────────────────
+  const handleExport = () => {
+    const data = JSON.stringify({ name: workflowName, nodes, edges }, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${workflowName.replace(/\s+/g, "_")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("워크플로우가 내보내졌습니다");
+  };
+
+  const handleImport = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const wf = JSON.parse(ev.target.result);
+          if (!wf.nodes || !wf.edges) throw new Error("Invalid format");
+          setNodes(wf.nodes);
+          setEdges(wf.edges);
+          setWorkflowName(wf.name || "Imported Workflow");
+          api.newWorkflow();
+          setSelected(null);
+          setShowConfig(false);
+          toast.success(`"${wf.name || "워크플로우"}"를 가져왔습니다`);
+        } catch {
+          toast.error("유효하지 않은 워크플로우 파일입니다");
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
+  // ── Delete workflow ──────────────────────────────────────────
+  const handleDeleteWorkflow = async (id) => {
+    await api.deleteWorkflow(id);
+    if (api.currentId === id) handleNew();
+    toast.success("워크플로우가 삭제됐습니다");
+  };
+
   // ── Run ─────────────────────────────────────────────────────
   const handleRun = async () => {
     // Save first, then run via WebSocket
     const wf = await api.saveWorkflow(workflowName, nodes, edges);
     if (wf) {
       runWorkflow(wf.id);
+      // Refresh run count after a short delay
+      setTimeout(() => {
+        const token = localStorage.getItem("fa_token");
+        fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.json())
+          .then(data => { if (data.runCount !== undefined) setRunCount(data.runCount); })
+          .catch(() => {});
+      }, 2000);
     }
   };
 
@@ -203,15 +304,21 @@ export default function App() {
   // ── Keyboard shortcuts ──────────────────────────────────────
   useEffect(() => {
     if (!user) return;
-    const handler = (e) => {
+    const onDown = (e) => {
+      if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+        spaceDown.current = true;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && selected) {
-        // Don't delete if user is typing in an input
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
         deleteSelected();
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const onUp = (e) => {
+      if (e.code === "Space") spaceDown.current = false;
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
   }, [selected]); // eslint-disable-line
 
   if (!user) return <AuthModal />;
@@ -247,6 +354,7 @@ export default function App() {
         currentWorkflowId={api.currentId}
         nodes={nodes}
         onDuplicateWorkflow={api.duplicateWorkflow}
+        onDeleteWorkflow={handleDeleteWorkflow}
       />
 
       {/* Main area */}
@@ -274,6 +382,27 @@ export default function App() {
           <span style={{ fontSize: 11, color: user.plan === "free" ? "#F59E0B" : "#8B5CF6" }}>
             {user.plan === "free" ? "Free" : "Pro"}
           </span>
+          {user.plan === "free" && runCount !== null && (
+            <span title="이번 달 실행 횟수 (무료 플랜: 100회 제한)" style={{
+              fontSize: 10, color: runCount >= 80 ? "#EF4444" : "#666",
+              background: "#1A1A2E", border: `1px solid ${runCount >= 80 ? "#EF444444" : "#333"}`,
+              borderRadius: 4, padding: "2px 6px",
+            }}>
+              {runCount}/100 실행
+            </span>
+          )}
+          <button onClick={handleImport} style={{
+            padding: "4px 10px", background: "none", border: "1px solid #333",
+            borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            📥 가져오기
+          </button>
+          <button onClick={handleExport} style={{
+            padding: "4px 10px", background: "none", border: "1px solid #333",
+            borderRadius: 5, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            📤 내보내기
+          </button>
           <button onClick={() => setShowChat(true)} style={{
             padding: "4px 10px",
             background: "linear-gradient(135deg, #8B5CF622, #6D28D922)",
@@ -339,58 +468,84 @@ export default function App() {
             ref={canvasRef}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseDown={() => { setSelected(null); setShowConfig(false); }}
+            onMouseDown={handleCanvasMouseDown}
+            onWheel={handleWheel}
             style={{
               flex: 1, position: "relative", overflow: "hidden",
               backgroundImage: "radial-gradient(circle, #222244 1px, transparent 1px)",
-              backgroundSize: "24px 24px",
+              backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
+              backgroundPosition: `${pan.x % (24 * zoom)}px ${pan.y % (24 * zoom)}px`,
+              cursor: spaceDown.current ? "grab" : "default",
             }}
           >
-            {/* SVG edges */}
-            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-              {edges.map(([a, b], i) => (
-                <EdgeLine
-                  key={`${a}-${b}`}
-                  from={a}
-                  to={b}
-                  nodes={nodes}
-                  animated={runState.current && (runState.done.has(a) || runState.current === a)}
+            {/* Zoom indicator */}
+            {zoom !== 1 && (
+              <div style={{
+                position: "absolute", bottom: 8, right: 8, zIndex: 10,
+                background: "#1A1A2E", border: "1px solid #333", borderRadius: 6,
+                padding: "3px 8px", fontSize: 10, color: "#666",
+              }}>
+                {Math.round(zoom * 100)}%
+                <button onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} style={{
+                  background: "none", border: "none", color: "#555", cursor: "pointer",
+                  fontSize: 10, marginLeft: 6, fontFamily: "inherit", padding: 0,
+                }}>리셋</button>
+              </div>
+            )}
+
+            {/* Transformed content */}
+            <div style={{
+              position: "absolute", inset: 0,
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: "0 0",
+            }}>
+              {/* SVG edges */}
+              <svg style={{ position: "absolute", inset: 0, width: "9999px", height: "9999px", pointerEvents: "none", overflow: "visible" }}>
+                {edges.map(([a, b]) => (
+                  <EdgeLine
+                    key={`${a}-${b}`}
+                    from={a}
+                    to={b}
+                    nodes={nodes}
+                    animated={runState.current && (runState.done.has(a) || runState.current === a)}
+                  />
+                ))}
+                {connecting && connLine && (() => {
+                  const n = nodes.find((nd) => nd.id === connecting);
+                  if (!n) return null;
+                  return (
+                    <line
+                      x1={n.x + 227} y1={n.y + 45}
+                      x2={connLine.x} y2={connLine.y}
+                      stroke="#8B5CF6" strokeWidth={2}
+                      strokeDasharray="6 3" opacity={0.6}
+                    />
+                  );
+                })()}
+              </svg>
+
+              {/* Nodes */}
+              {nodes.map((n) => (
+                <NodeCard
+                  key={n.id}
+                  node={n}
+                  selected={selected === n.id}
+                  onSelect={setSelected}
+                  onDragStart={handleDragStart}
+                  onConnectStart={handleConnectStart}
+                  onConnectEnd={handleConnectEnd}
+                  running={runState.current === n.id}
+                  done={runState.done.has(n.id)}
                 />
               ))}
-              {connecting && connLine && (() => {
-                const n = nodes.find((nd) => nd.id === connecting);
-                if (!n) return null;
-                return (
-                  <line
-                    x1={n.x + 227} y1={n.y + 45}
-                    x2={connLine.x} y2={connLine.y}
-                    stroke="#8B5CF6" strokeWidth={2}
-                    strokeDasharray="6 3" opacity={0.6}
-                  />
-                );
-              })()}
-            </svg>
+            </div>
 
-            {/* Nodes */}
-            {nodes.map((n) => (
-              <NodeCard
-                key={n.id}
-                node={n}
-                selected={selected === n.id}
-                onSelect={setSelected}
-                onDragStart={handleDragStart}
-                onConnectStart={handleConnectStart}
-                onConnectEnd={handleConnectEnd}
-                running={runState.current === n.id}
-                done={runState.done.has(n.id)}
-              />
-            ))}
-
-            {/* Empty state */}
+            {/* Empty state (outside transform) */}
             {nodes.length === 0 && (
               <div style={{
                 position: "absolute", top: "50%", left: "50%",
                 transform: "translate(-50%, -50%)", textAlign: "center", color: "#444",
+                pointerEvents: "none",
               }}>
                 <div style={{ fontSize: 48, marginBottom: 12 }}>◆</div>
                 <div style={{ fontSize: 14, marginBottom: 6 }}>워크플로우가 비어있습니다</div>

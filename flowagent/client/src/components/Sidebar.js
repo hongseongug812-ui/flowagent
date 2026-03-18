@@ -4,7 +4,7 @@ import { NODE_TYPES, TEMPLATES } from "../utils/constants";
 export default function Sidebar({
   onAddNode, onLoadTemplate, onRun, running,
   workflows, onLoadWorkflow, onNewWorkflow, onSave, saving, connected,
-  onSchedule, currentWorkflowId, nodes, onDuplicateWorkflow,
+  onSchedule, currentWorkflowId, nodes, onDuplicateWorkflow, onDeleteWorkflow,
 }) {
   const [tab, setTab] = useState("nodes");
   const [showSchedule, setShowSchedule] = useState(false);
@@ -116,8 +116,8 @@ export default function Sidebar({
             </button>
             {workflows.map((wf) => (
               <div key={wf.id} style={{ position: "relative", marginBottom: 6 }}
-                onMouseEnter={e => e.currentTarget.querySelector(".dup-btn").style.opacity = "1"}
-                onMouseLeave={e => e.currentTarget.querySelector(".dup-btn").style.opacity = "0"}
+                onMouseEnter={e => { const b = e.currentTarget.querySelector(".dup-btn"); if (b) b.style.opacity = "1"; }}
+                onMouseLeave={e => { const b = e.currentTarget.querySelector(".dup-btn"); if (b) b.style.opacity = "0"; }}
               >
                 <button onClick={() => onLoadWorkflow(wf.id)} style={{
                   width: "100%", padding: "12px 12px", paddingRight: 36,
@@ -135,16 +135,36 @@ export default function Sidebar({
                     {wf.nodeCount}개 노드 · {wf.edgeCount}개 연결
                   </div>
                 </button>
-                <button
+                <div
                   className="dup-btn"
-                  onClick={(e) => { e.stopPropagation(); onDuplicateWorkflow?.(wf.id); }}
-                  title="복제"
                   style={{
                     position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
-                    background: "none", border: "none", color: "#555", cursor: "pointer",
-                    fontSize: 13, opacity: 0, transition: "opacity 0.15s", padding: 4,
+                    display: "flex", gap: 2,
+                    opacity: 0, transition: "opacity 0.15s",
                   }}
-                >⧉</button>
+                >
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDuplicateWorkflow?.(wf.id); }}
+                    title="복제"
+                    style={{
+                      background: "none", border: "none", color: "#555", cursor: "pointer",
+                      fontSize: 13, padding: 4,
+                    }}
+                  >⧉</button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`"${wf.name}" 워크플로우를 삭제할까요?`)) {
+                        onDeleteWorkflow?.(wf.id);
+                      }
+                    }}
+                    title="삭제"
+                    style={{
+                      background: "none", border: "none", color: "#EF444488", cursor: "pointer",
+                      fontSize: 12, padding: 4,
+                    }}
+                  >✕</button>
+                </div>
               </div>
             ))}
             {workflows.length === 0 && (
