@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FlowAgent — AI 자동화, 코딩 없이</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --purple: #8B5CF6;
+      --purple-dark: #6D28D9;
+      --bg: #080818;
+      --bg2: #0D0D22;
+      --bg3: #12122A;
+      --border: #1E1E40;
+      --text: #E0E0F0;
+      --muted: #666680;
+      --green: #4ade80;
+      --amber: #F59E0B;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 40px; height: 60px;
+      background: rgba(8,8,24,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+    .logo span { color: var(--purple); }
+    .nav-cta {
+      padding: 8px 20px;
+      background: var(--purple);
+      border: none; border-radius: 8px;
+      color: #fff; font-size: 13px; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+    }
+    .nav-cta:hover { background: var(--purple-dark); }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 80px 24px 60px;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(139,92,246,0.12) 0%, transparent 70%);
+    }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; margin-bottom: 28px;
+      background: rgba(139,92,246,0.12);
+      border: 1px solid rgba(139,92,246,0.3);
+      border-radius: 100px;
+      font-size: 12px; font-weight: 600; color: var(--purple);
+    }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    h1 {
+      font-size: clamp(36px, 7vw, 72px);
+      font-weight: 900; letter-spacing: -2px;
+      line-height: 1.08; margin-bottom: 24px;
+    }
+    h1 em { font-style: normal; color: var(--purple); }
+
+    .hero-sub {
+      max-width: 560px; margin: 0 auto 48px;
+      font-size: clamp(16px, 2.5vw, 20px);
+      color: var(--muted); line-height: 1.7;
+    }
+
+    /* ── WAITLIST FORM ── */
+    .waitlist-wrap { width: 100%; max-width: 480px; margin: 0 auto; }
+    .waitlist-form {
+      display: flex; gap: 10px;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 14px; padding: 6px 6px 6px 18px;
+    }
+    .waitlist-form input {
+      flex: 1; background: none; border: none; outline: none;
+      color: var(--text); font-size: 15px; font-family: inherit;
+      min-width: 0;
+    }
+    .waitlist-form input::placeholder { color: var(--muted); }
+    .waitlist-form button {
+      padding: 12px 24px;
+      background: linear-gradient(135deg, var(--purple), var(--purple-dark));
+      border: none; border-radius: 10px;
+      color: #fff; font-size: 14px; font-weight: 700;
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+      transition: opacity 0.15s;
+    }
+    .waitlist-form button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .waitlist-msg { margin-top: 14px; font-size: 14px; min-height: 20px; }
+    .waitlist-msg.success { color: var(--green); }
+    .waitlist-msg.error   { color: #F87171; }
+    .waitlist-count { margin-top: 12px; font-size: 12px; color: var(--muted); }
+
+    /* ── DEMO ── */
+    .demo-section {
+      padding: 80px 24px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    .section-label {
+      font-size: 11px; font-weight: 700; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--purple); margin-bottom: 16px;
+    }
+    .section-title {
+      font-size: clamp(26px, 4vw, 40px);
+      font-weight: 800; letter-spacing: -1px;
+      text-align: center; margin-bottom: 48px;
+    }
+
+    .demo-window {
+      width: 100%; max-width: 900px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden;
+    }
+    .demo-topbar {
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .demo-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .demo-topbar-title {
+      flex: 1; text-align: center;
+      font-size: 12px; color: var(--muted); font-weight: 600;
+    }
+    .demo-body { padding: 40px 24px; text-align: center; min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+    /* Fake node editor preview */
+    .fake-canvas { width: 100%; display: flex; align-items: center; justify-content: center; gap: 0; position: relative; }
+    .fake-node {
+      border-radius: 12px; padding: 14px 18px;
+      border: 1.5px solid var(--border);
+      background: #13132E;
+      font-size: 12px; text-align: left; min-width: 140px;
+      position: relative;
+    }
+    .fake-node-icon { font-size: 20px; margin-bottom: 6px; }
+    .fake-node-label { font-weight: 700; margin-bottom: 2px; }
+    .fake-node-sub { font-size: 10px; color: var(--muted); }
+    .fake-node.active { border-color: var(--purple); box-shadow: 0 0 20px rgba(139,92,246,0.25); }
+    .fake-node.done { border-color: var(--green); }
+
+    .fake-arrow {
+      width: 48px; height: 2px;
+      background: linear-gradient(90deg, var(--border), var(--purple));
+      position: relative; flex-shrink: 0;
+    }
+    .fake-arrow::after {
+      content: ""; position: absolute; right: -5px; top: -4px;
+      border: 5px solid transparent;
+      border-left-color: var(--purple);
+    }
+
+    .demo-log {
+      margin-top: 32px; width: 100%; max-width: 600px;
+      background: #0A0A1C; border-radius: 8px; padding: 16px;
+      text-align: left; font-family: "SF Mono", monospace; font-size: 11px;
+    }
+    .log-line { margin-bottom: 4px; }
+    .log-line.success { color: var(--green); }
+    .log-line.info    { color: #60A5FA; }
+    .log-line.warn    { color: var(--amber); }
+
+    /* ── FEATURES ── */
+    .features-section {
+      padding: 80px 24px;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px; margin-top: 48px;
+    }
+    .feature-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      transition: border-color 0.2s;
+    }
+    .feature-card:hover { border-color: rgba(139,92,246,0.4); }
+    .feature-icon { font-size: 32px; margin-bottom: 16px; }
+    .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .feature-desc { font-size: 13px; color: var(--muted); line-height: 1.7; }
+
+    /* ── USE CASES ── */
+    .usecases-section {
+      padding: 80px 24px;
+      background: var(--bg2);
+    }
+    .usecases-inner { max-width: 1100px; margin: 0 auto; }
+    .usecases-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px; margin-top: 48px;
+    }
+    .usecase-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 14px; padding: 24px;
+    }
+    .usecase-emoji { font-size: 28px; margin-bottom: 12px; }
+    .usecase-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .usecase-desc { font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .usecase-nodes {
+      margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .usecase-node-tag {
+      font-size: 10px; font-weight: 600;
+      padding: 3px 8px; border-radius: 100px;
+      background: rgba(139,92,246,0.12);
+      border: 1px solid rgba(139,92,246,0.25);
+      color: var(--purple);
+    }
+
+    /* ── PRICING ── */
+    .pricing-section {
+      padding: 80px 24px;
+      max-width: 800px; margin: 0 auto; text-align: center;
+    }
+    .pricing-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 20px; margin-top: 48px; text-align: left;
+    }
+    @media (max-width: 600px) { .pricing-grid { grid-template-columns: 1fr; } }
+
+    .plan-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+    }
+    .plan-card.pro {
+      border-color: var(--purple);
+      background: linear-gradient(135deg, rgba(139,92,246,0.08), var(--bg2));
+    }
+    .plan-badge {
+      display: inline-block; padding: 3px 10px;
+      background: var(--purple); border-radius: 100px;
+      font-size: 10px; font-weight: 700; margin-bottom: 12px;
+    }
+    .plan-name { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+    .plan-price { font-size: 36px; font-weight: 900; letter-spacing: -1px; margin: 12px 0; }
+    .plan-price span { font-size: 14px; font-weight: 400; color: var(--muted); }
+    .plan-features { list-style: none; margin: 20px 0; }
+    .plan-features li {
+      padding: 8px 0;
+      font-size: 13px;
+      display: flex; align-items: center; gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .plan-features li:last-child { border-bottom: none; }
+    .plan-features li::before { content: "✓"; color: var(--green); font-weight: 700; }
+    .plan-features li.no::before { content: "✗"; color: #444; }
+    .plan-features li.no { color: var(--muted); }
+
+    .plan-btn {
+      width: 100%; padding: 14px;
+      background: var(--purple);
+      border: none; border-radius: 10px;
+      color: #fff; font-size: 14px; font-weight: 700;
+      cursor: pointer; font-family: inherit;
+      transition: opacity 0.15s;
+    }
+    .plan-btn:hover { opacity: 0.85; }
+    .plan-btn.outline {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .plan-btn.outline:hover { border-color: var(--purple); }
+
+    /* ── FOOTER CTA ── */
+    .footer-cta {
+      padding: 100px 24px;
+      text-align: center;
+      background: radial-gradient(ellipse 80% 60% at 50% 100%, rgba(139,92,246,0.1) 0%, transparent 70%);
+    }
+    .footer-cta h2 { font-size: clamp(28px, 5vw, 48px); font-weight: 900; letter-spacing: -1.5px; margin-bottom: 20px; }
+    .footer-cta p { color: var(--muted); font-size: 16px; margin-bottom: 40px; }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 40px;
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="logo"><span>◆</span> FlowAgent</div>
+  <a href="http://localhost:3000" class="nav-cta">앱 열기 →</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="badge">
+    <span class="badge-dot"></span>
+    얼리 액세스 모집 중
+  </div>
+
+  <h1>
+    AI 자동화,<br />
+    이제 <em>코딩 없이</em>
+  </h1>
+
+  <p class="hero-sub">
+    GPT-4o와 노코드 워크플로우 에디터로<br />
+    반복 업무를 자동화하세요.<br />
+    n8n + Zapier + AI Agent, 하나로.
+  </p>
+
+  <div class="waitlist-wrap">
+    <div class="waitlist-form">
+      <input type="email" id="hero-email" placeholder="이메일 주소 입력" />
+      <button id="hero-btn" onclick="joinWaitlist('hero')">웨이트리스트 등록</button>
+    </div>
+    <div class="waitlist-msg" id="hero-msg"></div>
+    <div class="waitlist-count" id="hero-count">
+      벌써 <strong id="wl-count">...</strong>명이 기다리고 있어요
+    </div>
+  </div>
+</section>
+
+<!-- DEMO PREVIEW -->
+<section class="demo-section">
+  <div class="section-label">실제 동작</div>
+  <h2 class="section-title">워크플로우를 드래그앤드롭으로</h2>
+
+  <div class="demo-window">
+    <div class="demo-topbar">
+      <div class="demo-dot" style="background:#FF5F57"></div>
+      <div class="demo-dot" style="background:#FEBC2E"></div>
+      <div class="demo-dot" style="background:#28C840"></div>
+      <div class="demo-topbar-title">고객 문의 자동 분류 워크플로우</div>
+    </div>
+    <div class="demo-body">
+      <div class="fake-canvas">
+        <div class="fake-node done">
+          <div class="fake-node-icon">⚡</div>
+          <div class="fake-node-label">Webhook 수신</div>
+          <div class="fake-node-sub">고객 문의 도착</div>
+        </div>
+        <div class="fake-arrow"></div>
+        <div class="fake-node active">
+          <div class="fake-node-icon">🤖</div>
+          <div class="fake-node-label">AI 분석</div>
+          <div class="fake-node-sub">GPT-4o 처리 중...</div>
+        </div>
+        <div class="fake-arrow"></div>
+        <div class="fake-node">
+          <div class="fake-node-icon">🔀</div>
+          <div class="fake-node-label">카테고리 분기</div>
+          <div class="fake-node-sub">환불/기술/기타</div>
+        </div>
+        <div class="fake-arrow"></div>
+        <div class="fake-node">
+          <div class="fake-node-icon">📤</div>
+          <div class="fake-node-label">Slack 알림</div>
+          <div class="fake-node-sub">담당팀에 전달</div>
+        </div>
+      </div>
+
+      <div class="demo-log">
+        <div class="log-line info">[09:15:32] ⚡ Webhook 수신: "환불 요청 드립니다..."</div>
+        <div class="log-line info">[09:15:32] 🤖 GPT-4o 분석 시작</div>
+        <div class="log-line success">[09:15:33] ✓ 분류 완료: 카테고리=환불, 긴급도=보통</div>
+        <div class="log-line success">[09:15:33] ✓ Slack #환불팀 알림 전송 완료</div>
+        <div class="log-line info">[09:15:33] 🏁 워크플로우 완료 (1.2s)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features-section">
+  <div style="text-align:center">
+    <div class="section-label">핵심 기능</div>
+    <h2 class="section-title">필요한 건 다 있어요</h2>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🤖</div>
+      <div class="feature-title">AI Agent 노드</div>
+      <div class="feature-desc">GPT-4o를 워크플로우 안에 바로 연결. 프롬프트만 입력하면 텍스트 분석, 요약, 분류, 생성까지 자동으로.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔗</div>
+      <div class="feature-title">API Call 노드</div>
+      <div class="feature-desc">Slack, Notion, Google Sheets, 카카오, 어떤 API든 코드 없이 연결. GET/POST/PUT 모두 지원.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔀</div>
+      <div class="feature-title">Condition 노드</div>
+      <div class="feature-desc">AI 분석 결과에 따라 다른 경로로 분기. "카테고리가 환불이면 A팀, 기술 문의면 B팀".</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⚡</div>
+      <div class="feature-title">Webhook 트리거</div>
+      <div class="feature-desc">URL 하나로 어디서든 워크플로우 실행. Shopify, Gmail, Typeform — 연결 안 되는 곳이 없음.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⏰</div>
+      <div class="feature-title">스케줄 실행</div>
+      <div class="feature-desc">매일 아침 9시, 30분마다, 매주 월요일. Cron으로 원하는 시간에 자동 실행.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔄</div>
+      <div class="feature-title">Transform 노드</div>
+      <div class="feature-desc">데이터 포맷 변환, 필터링, 계산. JavaScript 코드 몇 줄로 원하는 형태로 가공.</div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section class="usecases-section">
+  <div class="usecases-inner">
+    <div style="text-align:center">
+      <div class="section-label">활용 사례</div>
+      <h2 class="section-title">이런 걸 자동화할 수 있어요</h2>
+    </div>
+    <div class="usecases-grid">
+      <div class="usecase-card">
+        <div class="usecase-emoji">📧</div>
+        <div class="usecase-title">이메일 자동 분류 & 응답</div>
+        <div class="usecase-desc">수신 이메일을 AI가 분석해 카테고리별로 분류하고, 담당자에게 자동 배정. 단순 문의는 AI가 직접 답변.</div>
+        <div class="usecase-nodes">
+          <span class="usecase-node-tag">Webhook</span>
+          <span class="usecase-node-tag">AI Agent</span>
+          <span class="usecase-node-tag">Condition</span>
+          <span class="usecase-node-tag">API Call</span>
+        </div>
+      </div>
+      <div class="usecase-card">
+        <div class="usecase-emoji">📝</div>
+        <div class="usecase-title">콘텐츠 자동 생성</div>
+        <div class="usecase-desc">키워드를 입력하면 GPT-4o가 블로그 글 초안 생성 → Notion에 자동 저장 → Slack으로 알림.</div>
+        <div class="usecase-nodes">
+          <span class="usecase-node-tag">Schedule</span>
+          <span class="usecase-node-tag">AI Agent</span>
+          <span class="usecase-node-tag">API Call</span>
+        </div>
+      </div>
+      <div class="usecase-card">
+        <div class="usecase-emoji">🛒</div>
+        <div class="usecase-title">고객 문의 자동 응답</div>
+        <div class="usecase-desc">Shopify 주문 웹훅 → AI가 문의 내용 파악 → 상황에 맞는 답변 자동 생성 → 이메일 발송.</div>
+        <div class="usecase-nodes">
+          <span class="usecase-node-tag">Webhook</span>
+          <span class="usecase-node-tag">AI Agent</span>
+          <span class="usecase-node-tag">Transform</span>
+        </div>
+      </div>
+      <div class="usecase-card">
+        <div class="usecase-emoji">📊</div>
+        <div class="usecase-title">데이터 리포트 자동화</div>
+        <div class="usecase-desc">매주 월요일 9시, DB에서 데이터 조회 → AI가 인사이트 요약 → Google Sheets + Slack 리포트.</div>
+        <div class="usecase-nodes">
+          <span class="usecase-node-tag">Schedule</span>
+          <span class="usecase-node-tag">API Call</span>
+          <span class="usecase-node-tag">AI Agent</span>
+          <span class="usecase-node-tag">API Call</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="pricing-section">
+  <div class="section-label">요금제</div>
+  <h2 class="section-title">시작은 무료로</h2>
+  <div class="pricing-grid">
+    <div class="plan-card">
+      <div class="plan-name">Free</div>
+      <div class="plan-price">₩0 <span>/ 월</span></div>
+      <ul class="plan-features">
+        <li>월 100회 워크플로우 실행</li>
+        <li>노드 에디터 풀 액세스</li>
+        <li>AI Agent, API Call, Webhook</li>
+        <li>실행 히스토리 30일</li>
+        <li class="no">스케줄 실행</li>
+        <li class="no">무제한 실행</li>
+      </ul>
+      <button class="plan-btn outline" onclick="window.location='http://localhost:3000'">무료로 시작</button>
+    </div>
+    <div class="plan-card pro">
+      <div class="plan-badge">PRO</div>
+      <div class="plan-name">Pro</div>
+      <div class="plan-price">₩29,000 <span>/ 월</span></div>
+      <ul class="plan-features">
+        <li>무제한 워크플로우 실행</li>
+        <li>노드 에디터 풀 액세스</li>
+        <li>AI Agent, API Call, Webhook</li>
+        <li>실행 히스토리 무제한</li>
+        <li>스케줄 실행 무제한</li>
+        <li>우선 지원</li>
+      </ul>
+      <button class="plan-btn" onclick="alert('얼리 액세스 신청 후 오픈 시 안내 드릴게요!')">얼리 액세스 신청</button>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER CTA -->
+<section class="footer-cta">
+  <h2>지금 웨이트리스트 등록하고<br/>오픈 시 <em style="color:var(--purple)">50% 할인</em> 받으세요</h2>
+  <p>선착순 100명 얼리 어답터 혜택 제공</p>
+  <div class="waitlist-wrap">
+    <div class="waitlist-form">
+      <input type="email" id="footer-email" placeholder="이메일 주소 입력" />
+      <button id="footer-btn" onclick="joinWaitlist('footer')">등록하기</button>
+    </div>
+    <div class="waitlist-msg" id="footer-msg"></div>
+  </div>
+</section>
+
+<footer>
+  <div><span style="color:var(--purple)">◆</span> FlowAgent</div>
+  <div>© 2026 FlowAgent. All rights reserved.</div>
+</footer>
+
+<script>
+  const API_BASE = "http://localhost:4000";
+
+  // Load waitlist count on page load
+  async function loadCount() {
+    try {
+      const r = await fetch(`${API_BASE}/api/waitlist/count`);
+      const d = await r.json();
+      const el = document.getElementById("wl-count");
+      if (el) el.textContent = d.count.toLocaleString();
+    } catch (e) { /* silent */ }
+  }
+  loadCount();
+
+  async function joinWaitlist(source) {
+    const emailEl = document.getElementById(`${source}-email`);
+    const msgEl   = document.getElementById(`${source}-msg`);
+    const btnEl   = document.getElementById(`${source}-btn`);
+    const email   = emailEl.value.trim();
+
+    if (!email) { showMsg(msgEl, "이메일을 입력해주세요", "error"); return; }
+
+    btnEl.disabled = true;
+    btnEl.textContent = "등록 중...";
+
+    try {
+      const r = await fetch(`${API_BASE}/api/waitlist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const d = await r.json();
+      if (d.alreadyExists) {
+        showMsg(msgEl, "이미 등록된 이메일입니다 😊", "success");
+      } else {
+        showMsg(msgEl, `🎉 등록 완료! 현재 ${d.count}번째 얼리 어답터입니다`, "success");
+        emailEl.value = "";
+        loadCount();
+      }
+    } catch (e) {
+      showMsg(msgEl, "잠시 후 다시 시도해주세요", "error");
+    }
+
+    btnEl.disabled = false;
+    btnEl.textContent = "등록하기";
+  }
+
+  function showMsg(el, text, type) {
+    el.textContent = text;
+    el.className = `waitlist-msg ${type}`;
+  }
+</script>
+
+</body>
+</html>

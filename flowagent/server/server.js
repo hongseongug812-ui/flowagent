@@ -1,0 +1,509 @@
+require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
+const express = require("express");
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
+const OpenAI = require("openai");
+const fetch = require("node-fetch");
+const { JSONPath } = require("jsonpath-plus");
+
+const db = require("./db");
+const { router: authRouter, authMiddleware, checkRunLimit } = require("./auth");
+const jwt = require("jsonwebtoken");
+const cron = require("node-cron");
+const JWT_SECRET = process.env.JWT_SECRET || "flowagent-dev-secret";
+
+// ── Cron registry ─────────────────────────────────────────────
+const cronJobs = new Map(); // workflowId → ScheduledTask
+
+function registerCron(wf) {
+  if (cronJobs.has(wf.id)) { cronJobs.get(wf.id).destroy(); cronJobs.delete(wf.id); }
+  if (!wf.scheduleEnabled || !wf.scheduleCron) return;
+  if (!cron.validate(wf.scheduleCron)) { console.warn(`[Cron] Invalid expression for ${wf.id}: ${wf.scheduleCron}`); return; }
+  const task = cron.schedule(wf.scheduleCron, () => {
+    console.log(`[Cron] Running workflow ${wf.name} (${wf.id})`);
+    executeWorkflowBackground(wf.id, wf.userId);
+  }, { timezone: "Asia/Seoul" });
+  cronJobs.set(wf.id, task);
+  console.log(`  ✓ Cron scheduled: "${wf.name}" @ ${wf.scheduleCron}`);
+}
+
+async function executeWorkflowBackground(workflowId, userId) {
+  // Fake ws object that discards messages (background execution)
+  const fakeWs = { readyState: 1, OPEN: 1, send: () => {} };
+  await executeWorkflow(workflowId, userId, fakeWs);
+}
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+// ── Auth ─────────────────────────────────────────────────────
+app.use(express.json());
+app.use(cors());
+app.use("/api/auth", authRouter);
+
+// ── REST API (protected) ─────────────────────────────────────
+
+app.get("/api/workflows", authMiddleware, (req, res) => {
+  const list = db.listWorkflows(req.user.id).map(({ id, name, updatedAt, nodes, edges }) => ({
+    id, name, updatedAt,
+    nodeCount: nodes.length,
+    edgeCount: edges.length,
+  }));
+  res.json(list);
+});
+
+app.get("/api/workflows/:id", authMiddleware, (req, res) => {
+  const wf = db.getWorkflow(req.params.id);
+  if (!wf || wf.userId !== req.user.id) return res.status(404).json({ error: "Not found" });
+  res.json(wf);
+});
+
+app.post("/api/workflows", authMiddleware, (req, res) => {
+  const wf = db.createWorkflow({ ...req.body, userId: req.user.id });
+  res.status(201).json(wf);
+});
+
+app.put("/api/workflows/:id", authMiddleware, (req, res) => {
+  const wf = db.updateWorkflow(req.params.id, req.user.id, req.body);
+  if (!wf) return res.status(404).json({ error: "Not found" });
+  res.json(wf);
+});
+
+app.delete("/api/workflows/:id", authMiddleware, (req, res) => {
+  db.deleteWorkflow(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+app.get("/api/executions", authMiddleware, (req, res) => {
+  res.json(db.listExecutions(req.user.id));
+});
+
+// POST /api/workflows/:id/webhook — generate webhook token
+app.post("/api/workflows/:id/webhook", authMiddleware, (req, res) => {
+  const token = uuidv4().replace(/-/g, "");
+  const wf = db.setWebhookToken(req.params.id, req.user.id, token);
+  if (!wf) return res.status(404).json({ error: "Not found" });
+  res.json({ webhookUrl: `/api/webhook/${token}`, token });
+});
+
+// POST /api/webhook/:token — public trigger endpoint
+app.post("/api/webhook/:token", async (req, res) => {
+  const wf = db.getByWebhookToken(req.params.token);
+  if (!wf) return res.status(404).json({ error: "Webhook not found" });
+
+  res.json({ ok: true, workflowId: wf.id, message: "Workflow triggered" });
+
+  // Run in background with request body as input
+  const fakeWs = {
+    readyState: 1, OPEN: 1,
+    send: (data) => console.log(`[Webhook] ${wf.name}:`, JSON.parse(data).type),
+  };
+  // Inject webhook payload into trigger node
+  const wfWithPayload = {
+    ...wf,
+    nodes: wf.nodes.map(n =>
+      n.type === "trigger" ? { ...n, _webhookPayload: req.body } : n
+    ),
+  };
+  executeWorkflow(wf.id, wf.userId, fakeWs, req.body);
+});
+
+// ── Waitlist (public) ─────────────────────────────────────────
+app.post("/api/waitlist", (req, res) => {
+  const { email } = req.body;
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: "유효한 이메일을 입력하세요" });
+  }
+  const result = db.addToWaitlist(email.toLowerCase().trim());
+  const count = db.getWaitlistCount();
+  if (result.alreadyExists) return res.json({ ok: true, alreadyExists: true, count });
+  res.json({ ok: true, alreadyExists: false, count });
+});
+
+app.get("/api/waitlist/count", (req, res) => {
+  res.json({ count: db.getWaitlistCount() });
+});
+
+// ── Stripe ────────────────────────────────────────────────────
+const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+const APP_URL = process.env.APP_URL || "http://localhost:3000";
+
+if (STRIPE_SECRET) {
+  const Stripe = require("stripe");
+  const stripe = new Stripe(STRIPE_SECRET);
+
+  // Create checkout session
+  app.post("/api/stripe/checkout", authMiddleware, async (req, res) => {
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        payment_method_types: ["card"],
+        line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+        success_url: `${APP_URL}?upgraded=1`,
+        cancel_url: `${APP_URL}?upgraded=0`,
+        metadata: { userId: req.user.id },
+      });
+      res.json({ url: session.url });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Stripe webhook — upgrade plan on payment
+  app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], STRIPE_WEBHOOK_SECRET);
+    } catch (e) {
+      return res.status(400).send(`Webhook Error: ${e.message}`);
+    }
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const userId = session.metadata?.userId;
+      if (userId) {
+        db.upgradePlan(userId, "pro");
+        console.log(`[Stripe] Upgraded user ${userId} to pro`);
+      }
+    }
+    res.json({ received: true });
+  });
+}
+
+// ── User Settings ─────────────────────────────────────────────
+app.get("/api/settings", authMiddleware, (req, res) => {
+  const settings = db.getSettings(req.user.id);
+  // Mask API keys: only show last 4 chars
+  const masked = {};
+  for (const [k, v] of Object.entries(settings)) {
+    masked[k] = v && k.toLowerCase().includes("key") ? "••••" + String(v).slice(-4) : v;
+  }
+  res.json(masked);
+});
+
+app.put("/api/settings", authMiddleware, (req, res) => {
+  const current = db.getSettings(req.user.id);
+  // Merge: if value is masked (••••...) keep old value
+  const incoming = req.body || {};
+  const merged = { ...current };
+  for (const [k, v] of Object.entries(incoming)) {
+    if (v && !String(v).startsWith("••••")) merged[k] = v;
+    else if (!v) delete merged[k]; // empty = clear
+  }
+  db.saveSettings(req.user.id, merged);
+  res.json({ ok: true });
+});
+
+// PUT /api/workflows/:id/schedule — enable/disable cron
+app.put("/api/workflows/:id/schedule", authMiddleware, (req, res) => {
+  const { cron: cronExpr, enabled } = req.body;
+  if (cronExpr && !cron.validate(cronExpr)) {
+    return res.status(400).json({ error: "유효하지 않은 Cron 표현식입니다" });
+  }
+  const wf = db.setSchedule(req.params.id, req.user.id, { cron: cronExpr, enabled: !!enabled });
+  if (!wf) return res.status(404).json({ error: "Not found" });
+  registerCron(wf);
+  res.json(wf);
+});
+
+// ── Node executor (simulated, plug in real logic later) ──────
+
+const NODE_EXECUTORS = {
+  trigger: async (node, input, ctx) => {
+    await sleep(100);
+    return { output: { event: "received", data: ctx?.webhookPayload || input || { payload: "sample_data" } } };
+  },
+
+  ai_agent: async (node, input, ctx) => {
+    const userKey = ctx?.userSettings?.openai_api_key;
+    const client = userKey ? new OpenAI({ apiKey: userKey }) : openai;
+    const model = node.config?.model === "gpt-4o" || !node.config?.model?.startsWith("claude")
+      ? (node.config?.model || OPENAI_MODEL)
+      : OPENAI_MODEL;
+    const prompt = node.config?.prompt || "Process this input";
+    const userContent = input ? `Input:\n${JSON.stringify(input, null, 2)}\n\n${prompt}` : prompt;
+
+    const response = await client.chat.completions.create({
+      model,
+      messages: [{ role: "user", content: userContent }],
+      temperature: node.config?.temperature ?? 0.7,
+    });
+
+    const result = response.choices[0].message.content;
+    const tokens = response.usage?.total_tokens ?? 0;
+
+    return {
+      output: {
+        model,
+        tokens,
+        result,
+        input_preview: JSON.stringify(input).slice(0, 100),
+      },
+    };
+  },
+
+  api_call: async (node, input) => {
+    const url = node.config?.url || "https://api.example.com";
+    const method = (node.config?.method || "GET").toUpperCase();
+    const headers = node.config?.headers ? JSON.parse(node.config.headers) : {};
+    const hasBody = method !== "GET" && method !== "HEAD";
+
+    const start = Date.now();
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...headers },
+      ...(hasBody && input ? { body: JSON.stringify(input) } : {}),
+    });
+    const responseTime = Date.now() - start;
+    let body;
+    const ct = res.headers.get("content-type") || "";
+    try {
+      body = ct.includes("application/json") ? await res.json() : await res.text();
+    } catch {
+      body = await res.text();
+    }
+    return { output: { status: res.status, url, method, responseTime, body } };
+  },
+
+  condition: async (node, input) => {
+    const expr = node.config?.expression || "$..*";
+    const operator = node.config?.operator || "exists";
+    const expected = node.config?.value;
+
+    let result = false;
+    try {
+      const matches = JSONPath({ path: expr, json: input ?? {} });
+      if (operator === "exists") result = matches.length > 0;
+      else if (operator === "equals") result = String(matches[0]) === String(expected);
+      else if (operator === "contains") result = String(matches[0]).includes(String(expected));
+      else if (operator === "gt") result = Number(matches[0]) > Number(expected);
+      else if (operator === "lt") result = Number(matches[0]) < Number(expected);
+    } catch {
+      result = false;
+    }
+    return { output: { condition: result, branch: result ? "true" : "false", input }, branch: result ? "true" : "false" };
+  },
+
+  transform: async (node, input) => {
+    const code = node.config?.code || "return input;";
+    let output;
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function("input", code);
+      output = fn(input);
+    } catch (err) {
+      throw new Error(`Transform 오류: ${err.message}`);
+    }
+    return { output };
+  },
+
+  output: async (node, input) => {
+    await sleep(200 + rand(200));
+    return { output: { delivered: true, data: input } };
+  },
+};
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function rand(n) { return Math.random() * n; }
+
+// ── Workflow execution engine ────────────────────────────────
+
+function topoSort(nodes, edges) {
+  const adj = new Map();
+  const inDeg = new Map();
+  nodes.forEach(n => { adj.set(n.id, []); inDeg.set(n.id, 0); });
+  edges.forEach(([from, to]) => {
+    adj.get(from)?.push(to);
+    inDeg.set(to, (inDeg.get(to) || 0) + 1);
+  });
+  const queue = nodes.filter(n => (inDeg.get(n.id) || 0) === 0);
+  const sorted = [];
+  while (queue.length) {
+    const n = queue.shift();
+    sorted.push(n);
+    (adj.get(n.id) || []).forEach(nid => {
+      inDeg.set(nid, inDeg.get(nid) - 1);
+      if (inDeg.get(nid) === 0) {
+        const node = nodes.find(nd => nd.id === nid);
+        if (node) queue.push(node);
+      }
+    });
+  }
+  return sorted;
+}
+
+async function executeWorkflow(workflowId, userId, ws, webhookPayload = null) {
+  const wf = db.getWorkflow(workflowId);
+  if (!wf || wf.userId !== userId) {
+    ws.send(JSON.stringify({ type: "error", message: "Workflow not found" }));
+    return;
+  }
+
+  // Load user's API keys (fall back to server .env keys)
+  const userSettings = db.getSettings(userId);
+
+  db.incrementRunCount(userId);
+
+  const execId = uuidv4();
+  const execution = {
+    id: execId,
+    workflowId,
+    workflowName: wf.name,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    nodeResults: {},
+    logs: [],
+  };
+  db.createExecution({ id: execId, workflowId, workflowName: wf.name, userId });
+
+  const send = (type, data) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type, executionId: execId, ...data }));
+    }
+  };
+
+  send("execution:start", { workflowId, workflowName: wf.name });
+
+  const sorted = topoSort(wf.nodes, wf.edges);
+  const outputs = new Map();
+
+  for (const node of sorted) {
+    const nodeType = node.type;
+    const executor = NODE_EXECUTORS[nodeType];
+    if (!executor) continue;
+
+    // Gather inputs from parent nodes
+    const parentEdges = wf.edges.filter(([, to]) => to === node.id);
+    const input = parentEdges.length > 0
+      ? parentEdges.map(([from]) => outputs.get(from)).filter(Boolean)
+      : null;
+    const mergedInput = input && input.length === 1 ? input[0] : input;
+
+    send("node:start", { nodeId: node.id, nodeType, nodeName: node.config?.name || nodeType });
+
+    const log = (msg) => {
+      const entry = { time: new Date().toISOString(), nodeId: node.id, msg };
+      execution.logs.push(entry);
+      send("log", entry);
+    };
+
+    try {
+      log(`▶ ${node.config?.name || nodeType} 실행 시작`);
+      const result = await executor(node, mergedInput, { webhookPayload, userSettings });
+      outputs.set(node.id, result.output);
+      execution.nodeResults[node.id] = { status: "done", output: result.output };
+      log(`✓ ${node.config?.name || nodeType} 완료`);
+      send("node:done", { nodeId: node.id, result: result.output });
+    } catch (err) {
+      execution.nodeResults[node.id] = { status: "error", error: err.message };
+      log(`✗ ${node.config?.name || nodeType} 오류: ${err.message}`);
+      send("node:error", { nodeId: node.id, error: err.message });
+      execution.status = "failed";
+      db.saveExecution({ id: execId, status: "failed", completedAt: new Date().toISOString(), nodeResults: execution.nodeResults, logs: execution.logs });
+      send("execution:error", { error: err.message });
+      return;
+    }
+  }
+
+  execution.status = "completed";
+  execution.completedAt = new Date().toISOString();
+  db.saveExecution({ id: execId, status: "completed", completedAt: execution.completedAt, nodeResults: execution.nodeResults, logs: execution.logs });
+  send("execution:complete", {
+    duration: new Date(execution.completedAt) - new Date(execution.startedAt),
+    nodeCount: sorted.length,
+  });
+}
+
+// ── WebSocket handler ────────────────────────────────────────
+
+wss.on("connection", (ws) => {
+  ws.userId = null;
+
+  ws.on("message", async (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+
+      switch (msg.type) {
+        case "auth":
+          try {
+            const payload = jwt.verify(msg.token, JWT_SECRET);
+            ws.userId = payload.id;
+            ws.send(JSON.stringify({ type: "auth:ok", userId: ws.userId }));
+          } catch {
+            ws.send(JSON.stringify({ type: "error", message: "토큰이 유효하지 않습니다" }));
+          }
+          break;
+
+        case "workflow:run":
+          if (!ws.userId) {
+            ws.send(JSON.stringify({ type: "error", message: "인증이 필요합니다" }));
+            return;
+          }
+          if (!msg.workflowId) {
+            ws.send(JSON.stringify({ type: "error", message: "workflowId required" }));
+            return;
+          }
+          executeWorkflow(msg.workflowId, ws.userId, ws);
+          break;
+
+        case "ping":
+          ws.send(JSON.stringify({ type: "pong" }));
+          break;
+
+        default:
+          ws.send(JSON.stringify({ type: "error", message: `Unknown type: ${msg.type}` }));
+      }
+    } catch (err) {
+      ws.send(JSON.stringify({ type: "error", message: err.message }));
+    }
+  });
+
+  ws.on("close", () => console.log("[WS] Client disconnected"));
+});
+
+// ── Seed demo workflows (only if DB is empty) ────────────────
+
+if (db.isEmpty()) {
+  db.createWorkflow({
+    name: "이메일 자동 분류",
+    nodes: [
+      { id: "t1", type: "trigger", x: 80,  y: 200, config: { name: "이메일 수신", triggerType: "webhook" } },
+      { id: "t2", type: "ai_agent", x: 380, y: 200, config: { name: "내용 분석", model: "gpt-4o", prompt: "이메일을 분류해주세요: 업무/스팸/개인" } },
+      { id: "t3", type: "condition", x: 680, y: 200, config: { name: "분류 결과 확인", expression: "$.result", operator: "exists" } },
+      { id: "t4", type: "output", x: 980, y: 200, config: { name: "라벨 적용" } },
+    ],
+    edges: [["t1", "t2"], ["t2", "t3"], ["t3", "t4"]],
+  });
+  db.createWorkflow({
+    name: "뉴스 요약 → 슬랙",
+    nodes: [
+      { id: "n1", type: "trigger", x: 80,  y: 200, config: { name: "매일 아침 9시", triggerType: "schedule" } },
+      { id: "n2", type: "api_call", x: 380, y: 200, config: { name: "뉴스 API 호출", url: "https://jsonplaceholder.typicode.com/posts/1", method: "GET" } },
+      { id: "n3", type: "ai_agent", x: 680, y: 200, config: { name: "AI 요약", prompt: "다음 내용을 3줄로 요약해주세요." } },
+      { id: "n4", type: "output",   x: 980, y: 200, config: { name: "슬랙 전송" } },
+    ],
+    edges: [["n1", "n2"], ["n2", "n3"], ["n3", "n4"]],
+  });
+  console.log("  ✓ Demo workflows seeded");
+}
+
+// ── Restore cron jobs on startup ─────────────────────────────
+const scheduledWfs = db.listScheduledWorkflows();
+scheduledWfs.forEach(registerCron);
+if (scheduledWfs.length) console.log(`  ✓ Restored ${scheduledWfs.length} cron job(s)`);
+
+// ── Start ────────────────────────────────────────────────────
+
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
+  console.log(`\n  ◆ FlowAgent Server`);
+  console.log(`  ├─ REST API:   http://localhost:${PORT}/api`);
+  console.log(`  └─ WebSocket:  ws://localhost:${PORT}/ws\n`);
+});

@@ -1,0 +1,24 @@
+{
+  "name": "flowagent-server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.18.2",
+    "jsonpath-plus": "^10.4.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^2.7.0",
+    "openai": "^6.32.0",
+    "stripe": "^20.4.1",
+    "uuid": "^9.0.0",
+    "ws": "^8.16.0"
+  }
+}
