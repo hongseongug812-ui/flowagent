@@ -205,11 +205,27 @@ export default function App() {
     setShowConfig(false);
   };
 
+  // ── Auto-register schedule after save ───────────────────────
+  const syncSchedule = async (wfId, wfNodes) => {
+    const scheduleTrigger = wfNodes.find(n => n.type === "trigger" && n.config?.triggerType === "schedule");
+    if (!scheduleTrigger?.config?.cron) return;
+    const token = localStorage.getItem("fa_token");
+    const res = await fetch(`/api/workflows/${wfId}/schedule`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ cron: scheduleTrigger.config.cron, enabled: true }),
+    });
+    const data = await res.json();
+    if (!data.error) toast.success(`⏰ 스케줄 등록됨 (${scheduleTrigger.config.cron})`);
+    else toast.error(`스케줄 등록 실패: ${data.error}`);
+  };
+
   // ── Save / Load workflow ────────────────────────────────────
   const handleSave = async () => {
     const wf = await api.saveWorkflow(workflowName, nodes, edges);
     if (wf) {
       await api.fetchWorkflows();
+      await syncSchedule(wf.id, nodes);
     }
   };
 

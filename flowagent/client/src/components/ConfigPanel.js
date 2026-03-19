@@ -136,30 +136,61 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
 
           {node.config?.triggerType === "schedule" && (
             <>
-              <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Cron 프리셋</label>
+              <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>⏰ 시간 프리셋</label>
               <select
-                onChange={(e) => set("cron", e.target.value)}
+                onChange={(e) => { if (e.target.value) set("cron", e.target.value); }}
                 style={inputStyle}
-                defaultValue=""
+                value=""
               >
                 <option value="">-- 프리셋 선택 --</option>
-                <option value="0 9 * * *">매일 오전 9시</option>
-                <option value="0 9 * * 1-5">평일 오전 9시</option>
-                <option value="0 */6 * * *">6시간마다</option>
-                <option value="*/30 * * * *">30분마다</option>
-                <option value="0 0 * * 0">매주 일요일 자정</option>
-                <option value="0 0 1 * *">매월 1일 자정</option>
+                <optgroup label="매일">
+                  <option value="0 7 * * *">매일 오전 7시</option>
+                  <option value="0 8 * * *">매일 오전 8시</option>
+                  <option value="0 9 * * *">매일 오전 9시</option>
+                  <option value="0 10 * * *">매일 오전 10시</option>
+                  <option value="0 12 * * *">매일 오후 12시</option>
+                  <option value="0 18 * * *">매일 오후 6시</option>
+                  <option value="0 21 * * *">매일 오후 9시</option>
+                </optgroup>
+                <optgroup label="요일별">
+                  <option value="0 10 * * 1">매주 월요일 오전 10시</option>
+                  <option value="0 10 * * 2">매주 화요일 오전 10시</option>
+                  <option value="0 10 * * 3">매주 수요일 오전 10시</option>
+                  <option value="0 10 * * 4">매주 목요일 오전 10시</option>
+                  <option value="0 10 * * 5">매주 금요일 오전 10시</option>
+                  <option value="0 9 * * 1-5">평일 오전 9시</option>
+                  <option value="0 10 * * 1,3,5">월·수·금 오전 10시</option>
+                  <option value="0 10 * * 2,4">화·목 오전 10시</option>
+                </optgroup>
+                <optgroup label="주기">
+                  <option value="*/5 * * * *">5분마다</option>
+                  <option value="*/15 * * * *">15분마다</option>
+                  <option value="*/30 * * * *">30분마다</option>
+                  <option value="0 * * * *">매시간</option>
+                  <option value="0 */6 * * *">6시간마다</option>
+                  <option value="0 0 * * 0">매주 일요일 자정</option>
+                  <option value="0 0 1 * *">매월 1일 자정</option>
+                </optgroup>
               </select>
-              <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Cron 표현식</label>
+
+              <label style={{ fontSize: 10, color: "#888", display: "block", marginBottom: 4 }}>Cron 직접 입력</label>
               <input
-                value={node.config?.cron || "0 9 * * *"}
+                value={node.config?.cron || ""}
                 onChange={(e) => set("cron", e.target.value)}
-                placeholder="0 9 * * *"
+                placeholder="0 10 * * 1  (월요일 10시)"
                 style={inputStyle}
               />
-              <div style={{ fontSize: 10, color: "#555", marginBottom: 14 }}>
-                분 시 일 월 요일 (서울 시간대 기준)
+              <div style={{ fontSize: 10, color: "#555", marginBottom: 6 }}>
+                형식: 분 시 일 월 요일 (서울 시간대)
               </div>
+              {node.config?.cron && (
+                <div style={{
+                  fontSize: 10, padding: "6px 10px", background: "#0D1F0D",
+                  border: "1px solid #4ADE8033", borderRadius: 6, color: "#4ADE80", marginBottom: 14,
+                }}>
+                  ✓ 저장 시 자동으로 스케줄이 활성화됩니다
+                </div>
+              )}
             </>
           )}
         </>

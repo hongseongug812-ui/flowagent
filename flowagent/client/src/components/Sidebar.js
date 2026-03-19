@@ -255,17 +255,25 @@ export default function Sidebar({
         {scheduleTrigger && currentWorkflowId && (
           <div style={{ background: "#0D0D1A", borderRadius: 10, padding: "10px 12px", border: "1px solid #222244" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showSchedule ? 10 : 0 }}>
-              <span style={{ fontSize: 11, color: "#8B5CF6", fontWeight: 700 }}>⏰ 스케줄 실행</span>
+              <div>
+                <span style={{ fontSize: 11, color: "#8B5CF6", fontWeight: 700 }}>⏰ 스케줄 실행</span>
+                {effectiveCron && (
+                  <div style={{ fontSize: 9, color: "#555", marginTop: 2 }}>{effectiveCron}</div>
+                )}
+              </div>
               <button onClick={() => setShowSchedule(v => !v)} style={{ background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>
-                {showSchedule ? "접기" : "설정"}
+                {showSchedule ? "접기" : "변경"}
               </button>
             </div>
             {showSchedule && (
               <>
+                <div style={{ fontSize: 10, color: "#555", marginBottom: 6 }}>
+                  Cron 표현식 (분 시 일 월 요일)
+                </div>
                 <input
                   value={schedCron}
                   onChange={e => setSchedCron(e.target.value)}
-                  placeholder={effectiveCron}
+                  placeholder={effectiveCron || "0 10 * * 1"}
                   style={{ width: "100%", padding: "6px 8px", background: "#1A1A2E", border: "1px solid #333", borderRadius: 6, color: "#E0E0F0", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 8, outline: "none" }}
                 />
                 <div style={{ display: "flex", gap: 6 }}>
@@ -273,7 +281,7 @@ export default function Sidebar({
                     ▶ 활성화
                   </button>
                   <button onClick={() => onSchedule({ cron: schedCron || effectiveCron, enabled: false })} style={{ flex: 1, padding: "7px 0", background: "none", border: "1px solid #444", borderRadius: 6, color: "#888", fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>
-                    ■ 비활성화
+                    ■ 중지
                   </button>
                 </div>
               </>
