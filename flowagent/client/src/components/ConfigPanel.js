@@ -53,31 +53,64 @@ function Select({ value, onChange, children }) {
   );
 }
 
-function TestBtn({ onClick, testing, result }) {
+function TestBtn({ onClick, testing, result, testInput, onTestInputChange }) {
+  const [showInput, setShowInput] = React.useState(false);
   return (
     <div style={{ marginTop: 4, marginBottom: 12 }}>
-      <button onClick={onClick} disabled={testing} style={{
-        width: "100%", padding: "8px 0",
-        background: testing ? "#111" : "#0D1A2E",
-        border: "1px solid #3B82F655",
-        borderRadius: 6, color: testing ? "#555" : "#60A5FA",
-        fontSize: 11, cursor: testing ? "not-allowed" : "pointer", fontFamily: "inherit",
-      }}>
-        {testing ? "⏳ 테스트 중..." : "▷ 노드 테스트"}
-      </button>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        <button onClick={onClick} disabled={testing} style={{
+          flex: 1, padding: "8px 0",
+          background: testing ? "#111" : "#0D1A2E",
+          border: "1px solid #3B82F655",
+          borderRadius: 6, color: testing ? "#555" : "#60A5FA",
+          fontSize: 11, cursor: testing ? "not-allowed" : "pointer", fontFamily: "inherit",
+        }}>
+          {testing ? "⏳ 테스트 중..." : "▷ 노드 테스트"}
+        </button>
+        <button
+          onClick={() => setShowInput(v => !v)}
+          title="테스트 입력 데이터 편집"
+          style={{
+            padding: "8px 10px", background: showInput ? "#1A1A3A" : "none",
+            border: `1px solid ${showInput ? "#8B5CF655" : "#222244"}`,
+            borderRadius: 6, color: showInput ? "#C4B5FD" : "#444",
+            fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}
+        >JSON</button>
+      </div>
+      {showInput && (
+        <div style={{ marginBottom: 6 }}>
+          <div style={{ fontSize: 9, color: "#444", marginBottom: 3 }}>테스트 입력 데이터 (JSON)</div>
+          <textarea
+            value={testInput}
+            onChange={e => onTestInputChange(e.target.value)}
+            rows={4}
+            style={{
+              width: "100%", padding: "6px 8px", background: "#080810",
+              border: "1px solid #222244", borderRadius: 6,
+              color: "#E0E0F0", fontSize: 10, fontFamily: "monospace",
+              outline: "none", resize: "vertical", boxSizing: "border-box",
+              lineHeight: 1.5,
+            }}
+            onFocus={e => e.target.style.borderColor = "#3B82F6"}
+            onBlur={e => e.target.style.borderColor = "#222244"}
+            placeholder={'{\n  "result": "테스트 값",\n  "items": []\n}'}
+          />
+        </div>
+      )}
       {result && (
         <div style={{
-          marginTop: 6, padding: "8px 10px",
+          padding: "8px 10px",
           background: result.ok ? "#0D1F0D" : "#1F0D0D",
           border: `1px solid ${result.ok ? "#4ADE8033" : "#EF444433"}`,
           borderRadius: 6, fontSize: 10,
           color: result.ok ? "#4ADE80" : "#F87171",
-          maxHeight: 120, overflow: "auto",
+          maxHeight: 160, overflow: "auto",
           whiteSpace: "pre-wrap", wordBreak: "break-all",
           fontFamily: "monospace",
         }}>
           {result.ok
-            ? `✓ 성공 (${result.duration}ms)\n${JSON.stringify(result.output, null, 2).slice(0, 500)}`
+            ? `✓ 성공 (${result.duration}ms)\n${JSON.stringify(result.output, null, 2).slice(0, 600)}`
             : `✗ 실패\n${result.error}`}
         </div>
       )}
@@ -93,7 +126,6 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [testInput, setTestInput] = useState('{}');
-  const [showTestInput, setShowTestInput] = useState(false);
 
   const set = (key, val) => onUpdate(node.id, key, val);
 
@@ -304,7 +336,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
             <div style={S.divider} />
             <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>테스트 입력 (JSON)</div>
             <Textarea value={testInput} onChange={setTestInput} placeholder='{"result": "테스트 입력"}' rows={2} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -361,7 +393,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
             </Field>
             <div style={S.divider} />
             <Textarea value={testInput} onChange={setTestInput} placeholder='{}' rows={2} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -403,7 +435,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
             }}>+ 조건 추가</button>
             <div style={S.divider} />
             <Textarea value={testInput} onChange={setTestInput} placeholder='{"result": "테스트"}' rows={2} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -440,7 +472,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
             </div>
             <div style={S.divider} />
             <Textarea value={testInput} onChange={setTestInput} placeholder='{"result": "테스트"}' rows={2} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -458,7 +490,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               <Input value={node.config?.channel} onChange={v => set("channel", v)} placeholder="#general" />
             </Field>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -498,7 +530,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               </Field>
             )}
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -522,7 +554,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               </Select>
             </Field>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -543,7 +575,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               <code style={{ color: "#F97316" }}>{"{{input.count}}"}</code> — 항목 수
             </div>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -563,7 +595,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               🔑 API 키는 ⚙ 설정 → Notion API Key에서 입력
             </div>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -594,7 +626,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               🔑 API 키는 ⚙ 설정 → SendGrid API Key에서 입력
             </div>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -635,7 +667,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
               출력: <code style={{ color: "#06B6D4" }}>{"{{input.items}}"}</code> — 필터된 배열, <code style={{ color: "#06B6D4" }}>{"{{input.count}}"}</code> — 결과 수
             </div>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 
@@ -673,7 +705,7 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
                 onChange={e => set("limit", parseInt(e.target.value))} style={S.input} />
             </Field>
             <div style={S.divider} />
-            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} testInput={testInput} onTestInputChange={setTestInput} />
           </>
         )}
 

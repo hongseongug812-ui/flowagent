@@ -235,6 +235,7 @@ export default function App() {
   // ── Template ────────────────────────────────────────────────
   const loadTemplate = (idx) => {
     const t = TEMPLATES[idx];
+    clearHistory();
     setNodes(t.nodes.map((n) => ({ ...n })));
     setEdges(t.edges.map((e) => [...e]));
     setWorkflowName(t.name);
@@ -266,9 +267,12 @@ export default function App() {
     }
   };
 
+  const clearHistory = () => { setHistoryStack([]); setFutureStack([]); };
+
   const handleLoad = async (id) => {
     const wf = await api.loadWorkflow(id);
     if (wf) {
+      clearHistory();
       setNodes(wf.nodes);
       setEdges(wf.edges);
       setWorkflowName(wf.name);
@@ -278,6 +282,7 @@ export default function App() {
   };
 
   const handleNew = () => {
+    clearHistory();
     api.newWorkflow();
     setNodes([]);
     setEdges([]);
@@ -534,6 +539,31 @@ export default function App() {
             </span>
           )}
           <div style={{ flex: 1 }} />
+          {/* Undo / Redo */}
+          <button
+            onClick={undo}
+            disabled={historyStack.length === 0}
+            title={`실행 취소 (Ctrl+Z) — ${historyStack.length}스텝`}
+            style={{
+              padding: "4px 8px", background: "none",
+              border: `1px solid ${historyStack.length ? "#333" : "#1A1A2E"}`,
+              borderRadius: 5, color: historyStack.length ? "#888" : "#333",
+              fontSize: 12, cursor: historyStack.length ? "pointer" : "not-allowed",
+              fontFamily: "inherit", transition: "all 0.15s",
+            }}
+          >↩</button>
+          <button
+            onClick={redo}
+            disabled={futureStack.length === 0}
+            title={`다시 실행 (Ctrl+Y) — ${futureStack.length}스텝`}
+            style={{
+              padding: "4px 8px", background: "none",
+              border: `1px solid ${futureStack.length ? "#333" : "#1A1A2E"}`,
+              borderRadius: 5, color: futureStack.length ? "#888" : "#333",
+              fontSize: 12, cursor: futureStack.length ? "pointer" : "not-allowed",
+              fontFamily: "inherit", transition: "all 0.15s",
+            }}
+          >↪</button>
           <span style={{ fontSize: 11, color: "#555" }}>{user.email}</span>
           <span style={{ fontSize: 11, color: user.plan === "free" ? "#F59E0B" : "#8B5CF6" }}>
             {user.plan === "free" ? "Free" : "Pro"}

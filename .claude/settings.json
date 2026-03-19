@@ -9,7 +9,8 @@
       "Read(//c/Users/ppp54/Downloads/flowagent-mvp/**)",
       "Bash(curl -s http://localhost:4000/api/waitlist/count)",
       "Bash(npm install:*)",
-      "Bash(taskkill //PID 12492 //F)"
+      "Bash(taskkill //PID 12492 //F)",
+      "Bash(npx react-scripts:*)"
     ],
     "additionalDirectories": [
       "c:\\Users\\ppp54\\.claude\\projects\\c--Users-ppp54-Downloads-flowagent-mvp\\memory"

@@ -1,4 +1,3 @@
-import React from "react";
 import { NODE_TYPES } from "../utils/constants";
 
 // 노드 타입별 설정 미리보기 텍스트
@@ -144,7 +143,7 @@ export default function NodeCard({
       )}
 
       {/* Output port */}
-      {node.type !== "output" && (
+      {node.type !== "output" && node.type !== "http_response" && (
         <div
           onMouseDown={(e) => { e.stopPropagation(); onConnectStart(e, node.id); }}
           style={{
