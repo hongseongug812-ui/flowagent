@@ -2,6 +2,7 @@ require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const vm = require("vm");
 const { WebSocketServer } = require("ws");
 const cors = require("cors");
 const { v4: uuidv4 } = require("uuid");
@@ -11,6 +12,53 @@ const fetch = require("node-fetch");
 const { JSONPath } = require("jsonpath-plus");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
+
+// ── Security helpers ──────────────────────────────────────────
+
+// SSRF 방지: private IP / 메타데이터 엔드포인트 차단
+function isPrivateUrl(rawUrl) {
+  let parsed;
+  try { parsed = new URL(rawUrl); } catch { return true; } // 파싱 실패 = 차단
+
+  const { hostname, protocol } = parsed;
+
+  // file:// 등 비-HTTP 프로토콜 차단
+  if (!["http:", "https:"].includes(protocol)) return true;
+
+  // localhost 및 loopback IPv6
+  if (hostname === "localhost" || hostname === "::1" || hostname === "0:0:0:0:0:0:0:1") return true;
+
+  // IPv4 private/reserved ranges (개별 검사)
+  if (
+    /^127\./.test(hostname)           || // 127.x.x.x loopback
+    /^0\.0\.0\.0$/.test(hostname)     || // unspecified
+    /^10\./.test(hostname)            || // 10.x.x.x Class A private
+    /^192\.168\./.test(hostname)      || // 192.168.x.x Class C private
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) || // 172.16-31.x.x Class B private
+    /^169\.254\./.test(hostname)      || // 169.254.x.x link-local (AWS/GCP metadata)
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(hostname) // 100.64-127.x CGNAT
+  ) return true;
+
+  // 클라우드 메타데이터 호스트명
+  if (["metadata.google.internal", "metadata.internal", "instance-data"].includes(hostname)) return true;
+
+  return false;
+}
+
+// JS 코드를 격리된 vm 컨텍스트에서 안전하게 실행 (RCE 방지)
+// - process, require, global, Buffer 등 Node.js 전역 접근 불가
+// - 타임아웃으로 무한루프 방지
+// - 코드는 반드시 return 문으로 결과를 반환해야 함
+function runSandboxed(code, context, timeoutMs = 5000) {
+  // Object.create(null) 로 프로토타입 없는 샌드박스 — __proto__ 체인 오염 방지
+  const sandbox = Object.assign(Object.create(null), context);
+  vm.createContext(sandbox);
+  // IIFE 래핑: 사용자 코드의 return 값을 __result에 저장
+  const wrapped = `__result = (function() { "use strict"; ${code} })();`;
+  sandbox.__result = undefined;
+  vm.runInContext(wrapped, sandbox, { timeout: timeoutMs, filename: "sandbox.js" });
+  return sandbox.__result;
+}
 
 const db = require("./db");
 const { router: authRouter, authMiddleware, checkRunLimit } = require("./auth");
@@ -579,6 +627,9 @@ const NODE_EXECUTORS = {
     if (!url || url.trim() === "" || url === "https://api.example.com") {
       throw new Error("API URL이 설정되지 않았습니다. 노드를 클릭해 URL을 입력하세요.");
     }
+    if (isPrivateUrl(url)) {
+      throw new Error(`보안 오류: 내부 네트워크 주소(${url})로의 요청은 허용되지 않습니다.`);
+    }
     const method = (node.config?.method || "GET").toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";
     const timeout = (node.config?.timeout || 30) * 1000;
@@ -680,9 +731,7 @@ const NODE_EXECUTORS = {
     const code = node.config?.code || "return input;";
     let output;
     try {
-      // eslint-disable-next-line no-new-func
-      const fn = new Function("input", "_", code);
-      // 유틸 함수 제공
+      // vm 샌드박스에서 실행 — process/require/global 접근 불가, 5초 타임아웃
       const utils = {
         pick: (obj, keys) => keys.reduce((a, k) => { a[k] = obj?.[k]; return a; }, {}),
         omit: (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k))),
@@ -691,8 +740,9 @@ const NODE_EXECUTORS = {
         format: (date) => new Date(date).toLocaleString("ko-KR"),
         toArray: (v) => Array.isArray(v) ? v : [v],
       };
-      output = fn(input, utils);
+      output = runSandboxed(`const input = __input; const _ = __utils; ${code}`, { __input: input, __utils: utils });
     } catch (err) {
+      if (err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") throw new Error("Transform 오류: 코드 실행 시간 초과 (5초). 무한루프나 과도한 연산이 없는지 확인하세요.");
       throw new Error(`Transform 오류: ${err.message}`);
     }
     if (output === undefined) output = input;
@@ -763,6 +813,9 @@ const NODE_EXECUTORS = {
   rss_feed: async (node) => {
     const url = node.config?.url;
     if (!url) throw new Error("RSS URL이 필요합니다. 노드 설정에서 입력하세요.");
+    if (isPrivateUrl(url)) {
+      throw new Error(`보안 오류: 내부 네트워크 주소(${url})로의 요청은 허용되지 않습니다.`);
+    }
     let res;
     try {
       res = await fetch(url, { headers: { "User-Agent": "FlowAgent/1.0" } });
@@ -908,14 +961,17 @@ const NODE_EXECUTORS = {
       trim: (s, n = 200) => String(s || "").slice(0, n),
     };
 
-    // eslint-disable-next-line no-new-func
-    const fn = new Function("item", "index", "_", code);
     const results = [];
     const errors = [];
 
     for (let i = 0; i < Math.min(items.length, limit); i++) {
       try {
-        const r = fn(items[i], i, utils);
+        // 항목마다 vm 샌드박스 실행 — process/require/global 접근 불가, 3초 타임아웃
+        const r = runSandboxed(
+          `const item = __item; const index = __index; const _ = __utils; ${code}`,
+          { __item: items[i], __index: i, __utils: utils },
+          3000
+        );
         results.push(r ?? items[i]);
       } catch (e) {
         errors.push({ index: i, error: e.message });
