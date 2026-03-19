@@ -6,7 +6,7 @@ export function useWebSocket() {
   const wsRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [authed, setAuthed] = useState(false);
-  const [runState, setRunState] = useState({ running: false, current: null, done: new Set(), executionId: null });
+  const [runState, setRunState] = useState({ running: false, current: null, done: new Set(), errors: new Set(), executionId: null });
   const [logs, setLogs] = useState([]);
 
   const connect = useCallback(() => {
@@ -35,7 +35,7 @@ export function useWebSocket() {
           setAuthed(true);
           break;
         case "execution:start":
-          setRunState({ running: true, current: null, done: new Set(), executionId: msg.executionId });
+          setRunState({ running: true, current: null, done: new Set(), errors: new Set(), executionId: msg.executionId });
           setLogs([{ time: new Date().toLocaleTimeString(), msg: `━━ ${msg.workflowName} 실행 시작 ━━`, color: "#8B5CF6" }]);
           break;
         case "node:start":
@@ -45,7 +45,7 @@ export function useWebSocket() {
           setRunState(prev => ({ ...prev, done: new Set([...prev.done, msg.nodeId]) }));
           break;
         case "node:error":
-          setRunState(prev => ({ ...prev, current: null, done: new Set([...prev.done, msg.nodeId]) }));
+          setRunState(prev => ({ ...prev, current: null, done: new Set([...prev.done, msg.nodeId]), errors: new Set([...prev.errors, msg.nodeId]) }));
           break;
         case "log":
           setLogs(prev => [...prev, {

@@ -25,10 +25,77 @@ function formatDate(iso) {
   });
 }
 
+function StatsTab({ executions }) {
+  const total = executions.length;
+  const completed = executions.filter(e => e.status === "completed").length;
+  const failed = executions.filter(e => e.status === "failed").length;
+  const successRate = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+  const durations = executions
+    .filter(e => e.completedAt && e.startedAt && e.status === "completed")
+    .map(e => new Date(e.completedAt) - new Date(e.startedAt));
+  const avgDuration = durations.length === 0 ? 0 : Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+
+  // Per-workflow stats
+  const byWorkflow = {};
+  executions.forEach(e => {
+    if (!byWorkflow[e.workflowName]) byWorkflow[e.workflowName] = { name: e.workflowName, total: 0, completed: 0, failed: 0 };
+    byWorkflow[e.workflowName].total++;
+    if (e.status === "completed") byWorkflow[e.workflowName].completed++;
+    if (e.status === "failed") byWorkflow[e.workflowName].failed++;
+  });
+  const wfList = Object.values(byWorkflow).sort((a, b) => b.total - a.total).slice(0, 10);
+
+  const StatCard = ({ label, value, sub, color = "#8B5CF6" }) => (
+    <div style={{ background: "#0D0D22", borderRadius: 12, padding: "16px 20px", border: "1px solid #1A1A3A", flex: 1, minWidth: 100 }}>
+      <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+      <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        <StatCard label="총 실행" value={total} color="#8B5CF6" />
+        <StatCard label="성공" value={completed} color="#4ADE80" />
+        <StatCard label="실패" value={failed} color="#F87171" />
+        <StatCard label="성공률" value={`${successRate}%`} color={successRate >= 80 ? "#4ADE80" : successRate >= 50 ? "#F59E0B" : "#F87171"} />
+        <StatCard label="평균 소요" value={avgDuration >= 1000 ? `${(avgDuration/1000).toFixed(1)}s` : `${avgDuration}ms`} color="#60A5FA" />
+      </div>
+
+      {wfList.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", color: "#8B5CF6", marginBottom: 10 }}>
+            워크플로우별 실행 현황
+          </div>
+          {wfList.map((wf, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: "10px 14px", marginBottom: 6,
+              background: "#0D0D22", borderRadius: 8, border: "1px solid #1A1A3A",
+            }}>
+              <div style={{ flex: 1, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wf.name}</div>
+              <span style={{ fontSize: 11, color: "#555" }}>{wf.total}회</span>
+              <span style={{ fontSize: 11, color: "#4ADE80" }}>✓{wf.completed}</span>
+              {wf.failed > 0 && <span style={{ fontSize: 11, color: "#F87171" }}>✗{wf.failed}</span>}
+              {/* Mini bar */}
+              <div style={{ width: 60, height: 6, background: "#1A1A3A", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${Math.round((wf.completed / wf.total) * 100)}%`, height: "100%", background: "#4ADE80", borderRadius: 3 }} />
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function HistoryModal({ onClose }) {
   const [executions, setExecutions] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("history");
 
   useEffect(() => {
     fetch("/api/executions", {
@@ -58,11 +125,28 @@ export default function HistoryModal({ onClose }) {
           display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "16px 24px", borderBottom: "1px solid #1A1A3A", flexShrink: 0,
         }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>📋 실행 히스토리</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>📋 실행 히스토리</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {[{ key: "history", label: "히스토리" }, { key: "stats", label: "📊 통계" }].map(t => (
+                <button key={t.key} onClick={() => setTab(t.key)} style={{
+                  padding: "4px 12px", background: "none",
+                  border: tab === t.key ? "1px solid #8B5CF6" : "1px solid #1A1A3A",
+                  borderRadius: 6, color: tab === t.key ? "#C4B5FD" : "#555",
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+                }}>{t.label}</button>
+              ))}
+            </div>
+          </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 18 }}>✕</button>
         </div>
 
-        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        {tab === "stats" ? (
+          loading ? (
+            <div style={{ color: "#555", fontSize: 12, textAlign: "center", padding: 40 }}>로딩 중...</div>
+          ) : <StatsTab executions={executions} />
+        ) : null}
+        {tab === "history" && <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
           {/* List */}
           <div style={{
             width: 340, borderRight: "1px solid #1A1A3A",
@@ -186,7 +270,7 @@ export default function HistoryModal({ onClose }) {
               </>
             )}
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

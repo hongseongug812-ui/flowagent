@@ -7,6 +7,7 @@ export default function Sidebar({
   onSchedule, currentWorkflowId, nodes, onDuplicateWorkflow, onDeleteWorkflow,
 }) {
   const [tab, setTab] = useState("nodes");
+  const [search, setSearch] = useState("");
   const [showSchedule, setShowSchedule] = useState(false);
   const [schedCron, setSchedCron] = useState("0 9 * * *");
   const [webhookUrl, setWebhookUrl] = useState(null);
@@ -107,6 +108,19 @@ export default function Sidebar({
 
         {tab === "saved" && (
           <>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="워크플로우 검색..."
+              style={{
+                width: "100%", padding: "7px 10px", marginBottom: 8,
+                background: "#0D0D22", border: "1px solid #222244",
+                borderRadius: 8, color: "#E0E0F0", fontSize: 11,
+                fontFamily: "inherit", outline: "none", boxSizing: "border-box",
+              }}
+              onFocus={e => e.currentTarget.style.borderColor = "#8B5CF6"}
+              onBlur={e => e.currentTarget.style.borderColor = "#222244"}
+            />
             <button onClick={onNewWorkflow} style={{
               width: "100%", padding: "10px 12px", marginBottom: 10,
               background: "none", border: "1px dashed #444", borderRadius: 10,
@@ -114,7 +128,7 @@ export default function Sidebar({
             }}>
               + 새 워크플로우
             </button>
-            {workflows.map((wf) => (
+            {workflows.filter(wf => wf.name.toLowerCase().includes(search.toLowerCase())).map((wf) => (
               <div key={wf.id} style={{ position: "relative", marginBottom: 6 }}
                 onMouseEnter={e => { const b = e.currentTarget.querySelector(".dup-btn"); if (b) b.style.opacity = "1"; }}
                 onMouseLeave={e => { const b = e.currentTarget.querySelector(".dup-btn"); if (b) b.style.opacity = "0"; }}

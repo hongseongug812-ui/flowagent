@@ -42,6 +42,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [workflowName, setWorkflowName] = useState("Untitled Workflow");
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -174,6 +175,10 @@ export default function App() {
     setShowConfig(false);
   };
 
+  const deleteEdge = useCallback((from, to) => {
+    setEdges((prev) => prev.filter(([a, b]) => !(a === from && b === to)));
+  }, []);
+
   const updateNodeConfig = (nodeId, key, val) => {
     setNodes((prev) =>
       prev.map((n) =>
@@ -301,6 +306,15 @@ export default function App() {
 
   const selectedNode = nodes.find((n) => n.id === selected);
 
+  // ── Run with validation ──────────────────────────────────────
+  const handleRunWithValidation = async () => {
+    const hasTrigger = nodes.some(n => n.type === "trigger");
+    if (!hasTrigger) { toast.error("트리거 노드가 없습니다. Trigger 노드를 추가하세요."); return; }
+    if (nodes.length < 2) { toast.warn("노드가 너무 적습니다. 최소 2개 이상 연결하세요."); return; }
+    if (edges.length === 0) { toast.warn("연결된 노드가 없습니다. 노드를 엣지로 연결하세요."); return; }
+    await handleRun();
+  };
+
   // ── Keyboard shortcuts ──────────────────────────────────────
   useEffect(() => {
     if (!user) return;
@@ -312,6 +326,26 @@ export default function App() {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
         deleteSelected();
       }
+      // Ctrl+S: 저장
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        handleSave();
+      }
+      // Ctrl+Enter: 실행
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!runState.running) handleRunWithValidation();
+      }
+      // Escape: 선택 해제 / 모달 닫기
+      if (e.key === "Escape") {
+        setSelected(null);
+        setShowConfig(false);
+        setShowShortcuts(false);
+      }
+      // ?: 단축키 안내
+      if (e.key === "?" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+        setShowShortcuts(v => !v);
+      }
     };
     const onUp = (e) => {
       if (e.code === "Space") spaceDown.current = false;
@@ -319,7 +353,7 @@ export default function App() {
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
     return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
-  }, [selected]); // eslint-disable-line
+  }, [selected, runState.running, nodes, edges]); // eslint-disable-line
 
   if (!user) return <AuthModal />;
 
@@ -338,11 +372,12 @@ export default function App() {
         toast.success(`"${wf.name}" 워크플로우가 생성됐습니다!`);
       }} />}
       {showOnboarding && <OnboardingOverlay onClose={() => { localStorage.setItem("fa_onboarded", "1"); setShowOnboarding(false); }} />}
+      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
       {/* Sidebar */}
       <Sidebar
         onAddNode={addNode}
         onLoadTemplate={loadTemplate}
-        onRun={handleRun}
+        onRun={handleRunWithValidation}
         running={runState.running}
         workflows={api.workflows}
         onLoadWorkflow={handleLoad}
@@ -429,6 +464,12 @@ export default function App() {
           }}>
             ⚙ 설정
           </button>
+          <button onClick={() => setShowShortcuts(true)} title="키보드 단축키 (?)키" style={{
+            padding: "4px 8px", background: "none", border: "1px solid #333",
+            borderRadius: 5, color: "#555", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            ?
+          </button>
           <button onClick={logout} style={{
             padding: "4px 10px", background: "none", border: "1px solid #333",
             borderRadius: 5, color: "#666", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
@@ -508,6 +549,7 @@ export default function App() {
                     to={b}
                     nodes={nodes}
                     animated={runState.current && (runState.done.has(a) || runState.current === a)}
+                    onDelete={deleteEdge}
                   />
                 ))}
                 {connecting && connLine && (() => {
@@ -536,6 +578,7 @@ export default function App() {
                   onConnectEnd={handleConnectEnd}
                   running={runState.current === n.id}
                   done={runState.done.has(n.id)}
+                  error={runState.errors?.has(n.id)}
                 />
               ))}
             </div>
@@ -621,6 +664,51 @@ function OnboardingOverlay({ onClose }) {
         }}>
           시작하기 →
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutsOverlay({ onClose }) {
+  const shortcuts = [
+    { key: "Ctrl + S", desc: "워크플로우 저장" },
+    { key: "Ctrl + Enter", desc: "워크플로우 실행" },
+    { key: "Delete / Backspace", desc: "선택한 노드 삭제" },
+    { key: "Space + 드래그", desc: "캔버스 패닝" },
+    { key: "Ctrl + 스크롤", desc: "줌 인/아웃" },
+    { key: "Esc", desc: "선택 해제 / 모달 닫기" },
+    { key: "?", desc: "이 단축키 안내 열기/닫기" },
+    { key: "엣지 호버 → ✕", desc: "연결선 삭제" },
+  ];
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 2000, padding: 24,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#111128", border: "1px solid #8B5CF644",
+        borderRadius: 16, width: "100%", maxWidth: 420, padding: "24px 28px",
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>⌨ 키보드 단축키</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16 }}>✕</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {shortcuts.map((s, i) => (
+            <div key={i} style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "8px 12px", background: "#0D0D22", borderRadius: 8,
+            }}>
+              <span style={{
+                fontFamily: "monospace", fontSize: 11, color: "#C4B5FD",
+                background: "#1A1A3A", padding: "2px 8px", borderRadius: 4, border: "1px solid #333",
+              }}>{s.key}</span>
+              <span style={{ fontSize: 12, color: "#888" }}>{s.desc}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

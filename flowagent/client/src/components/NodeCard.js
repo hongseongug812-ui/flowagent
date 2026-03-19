@@ -2,13 +2,15 @@ import React from "react";
 import { NODE_TYPES } from "../utils/constants";
 
 export default function NodeCard({
-  node, selected, onSelect, onDragStart, onConnectStart, onConnectEnd, running, done,
+  node, selected, onSelect, onDragStart, onConnectStart, onConnectEnd, running, done, error,
 }) {
   const t = NODE_TYPES[node.type];
   if (!t) return null;
 
-  const borderColor = selected ? "#fff" : t.color;
-  const glow = running
+  const borderColor = error ? "#EF4444" : selected ? "#fff" : t.color;
+  const glow = error
+    ? "0 0 20px #EF444488"
+    : running
     ? `0 0 24px ${t.color}88`
     : done ? `0 0 12px ${t.color}44` : "none";
 
@@ -46,7 +48,10 @@ export default function NodeCard({
             실행 중...
           </span>
         )}
-        {done && !running && (
+        {error && (
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "#EF4444" }}>✗ 오류</span>
+        )}
+        {done && !running && !error && (
           <span style={{ marginLeft: "auto", fontSize: 10, color: "#4ade80" }}>✓</span>
         )}
       </div>
