@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { NODE_TYPES, TEMPLATES } from "../utils/constants";
 
 export default function Sidebar({
@@ -8,6 +8,17 @@ export default function Sidebar({
 }) {
   const [tab, setTab] = useState("nodes");
   const [search, setSearch] = useState("");
+  const [templateCat, setTemplateCat] = useState("전체");
+
+  const categories = useMemo(() => {
+    const cats = ["전체", ...new Set(TEMPLATES.map(t => t.category).filter(Boolean))];
+    return cats;
+  }, []);
+
+  const filteredTemplates = useMemo(() => {
+    if (templateCat === "전체") return TEMPLATES;
+    return TEMPLATES.filter(t => t.category === templateCat);
+  }, [templateCat]);
   const [showSchedule, setShowSchedule] = useState(false);
   const [schedCron, setSchedCron] = useState("0 9 * * *");
   const [webhookUrl, setWebhookUrl] = useState(null);
@@ -88,23 +99,50 @@ export default function Sidebar({
           </button>
         ))}
 
-        {tab === "templates" && TEMPLATES.map((t, i) => (
-          <button key={i} onClick={() => onLoadTemplate(i)} style={{
-            width: "100%", padding: "14px 12px", marginBottom: 8,
-            background: "#1A1A2E", border: "1px solid #222244", borderRadius: 10,
-            cursor: "pointer", color: "#E0E0F0", fontFamily: "inherit", textAlign: "left",
-            fontSize: 12, transition: "border-color 0.2s",
-          }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#8B5CF6")}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#222244")}
-          >
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>{t.name}</div>
-            <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>{t.desc}</div>
-            <div style={{ fontSize: 10, color: "#555" }}>
-              {t.nodes.length}개 노드 · {t.edges.length}개 연결
+        {tab === "templates" && (
+          <>
+            {/* 카테고리 필터 */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10 }}>
+              {categories.map(cat => (
+                <button key={cat} onClick={() => setTemplateCat(cat)} style={{
+                  padding: "3px 9px", fontSize: 10, fontFamily: "inherit",
+                  background: templateCat === cat ? "#8B5CF622" : "none",
+                  border: `1px solid ${templateCat === cat ? "#8B5CF6" : "#333"}`,
+                  borderRadius: 20, color: templateCat === cat ? "#C4B5FD" : "#555",
+                  cursor: "pointer", transition: "all 0.15s",
+                }}>{cat}</button>
+              ))}
             </div>
-          </button>
-        ))}
+            {filteredTemplates.map((t) => {
+              const realIdx = TEMPLATES.indexOf(t);
+              return (
+                <button key={realIdx} onClick={() => onLoadTemplate(realIdx)} style={{
+                  width: "100%", padding: "12px 12px", marginBottom: 6,
+                  background: "#1A1A2E", border: "1px solid #222244", borderRadius: 10,
+                  cursor: "pointer", color: "#E0E0F0", fontFamily: "inherit", textAlign: "left",
+                  fontSize: 12, transition: "border-color 0.2s",
+                }}
+                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#8B5CF6")}
+                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#222244")}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                    <div style={{ fontWeight: 700, flex: 1 }}>{t.name}</div>
+                    {t.category && (
+                      <span style={{
+                        fontSize: 9, padding: "1px 6px", borderRadius: 10, flexShrink: 0, marginLeft: 6,
+                        background: "#8B5CF622", color: "#8B5CF6", border: "1px solid #8B5CF633",
+                      }}>{t.category}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#666", marginBottom: 6, lineHeight: 1.4 }}>{t.desc}</div>
+                  <div style={{ fontSize: 10, color: "#444" }}>
+                    {t.nodes.length}개 노드 · {t.edges.length}개 연결
+                  </div>
+                </button>
+              );
+            })}
+          </>
+        )}
 
         {tab === "saved" && (
           <>
