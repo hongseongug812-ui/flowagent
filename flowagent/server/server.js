@@ -754,12 +754,14 @@ const NODE_EXECUTORS = {
 };
 
 function resolveTemplate(template, input) {
-  if (!template || !input) return String(template || "");
+  if (!template) return "";
   return template.replace(/\{\{([^}]+)\}\}/g, (_, path) => {
     const keys = path.trim().split(".");
     let val = input;
     for (const k of keys) { val = val?.[k]; }
-    return val !== undefined ? String(val) : `{{${path}}}`;
+    if (val !== undefined && val !== null) return String(val);
+    // 미해결 변수는 빈 문자열로 처리 (리터럴 {{...}} 노출 방지)
+    return "";
   });
 }
 

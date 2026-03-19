@@ -13,9 +13,9 @@ const MODELS = [
 ];
 
 const SUGGESTIONS = [
-  "슬랙에 매일 아침 뉴스 요약 보내는 워크플로우 만들어줘",
-  "고객 문의 자동 분류 워크플로우 만들어줘",
-  "API Call 노드 사용법 알려줘",
+  "매주 월요일 오전 10시 운동 알람 디스코드로 보내줘",
+  "매일 아침 9시 뉴스 요약을 슬랙으로 보내는 워크플로우 만들어줘",
+  "고객 문의 웹훅 받아서 자동 분류하고 이메일 답장 보내줘",
   "트리거 종류에는 뭐가 있어?",
 ];
 
@@ -38,25 +38,64 @@ function parseWorkflowBlock(text) {
 
 const WORKFLOW_SYSTEM = `당신은 FlowAgent의 AI 개인 비서입니다. 워크플로우 자동화 전문가입니다.
 
-워크플로우를 만들어달라는 요청이 있으면, 설명 후 반드시 아래 형식의 JSON 블록을 포함하세요:
+워크플로우를 만들어달라는 요청이 있으면, 간단한 설명 후 반드시 아래 형식의 JSON 블록을 포함하세요:
 \`\`\`workflow
 {"name":"워크플로우 이름","nodes":[{"id":"n1","type":"타입","x":80,"y":200,"config":{...}}],"edges":[["n1","n2"]]}
 \`\`\`
 
-사용 가능한 노드 타입:
-- trigger: 트리거 (config: name, triggerType: "webhook"|"schedule"|"manual")
-- ai_agent: AI 처리 (config: name, model: "gpt-4o"|"claude-sonnet-4-6", prompt)
-- api_call: API 호출 (config: name, url, method: "GET"|"POST")
-- condition: 조건 분기 (config: name, expression, operator: "exists"|"equals"|"contains")
-- transform: 데이터 변환 (config: name, code)
-- slack: Slack 메시지 (config: name, message)
-- discord: Discord 메시지 (config: name, message)
-- telegram: Telegram 메시지 (config: name, message, chat_id)
-- notion: Notion 페이지 생성 (config: name, database_id, title, content)
-- email: 이메일 발송 (config: name, to, subject, body)
-- output: 출력 (config: name)
+## 사용 가능한 노드 타입
 
-노드 x좌표는 320씩 증가, y는 200 고정으로 설정하세요. 친절하게 한국어로 답변하세요.`;
+- **trigger**: 트리거
+  - triggerType: "webhook" | "schedule" | "manual"
+  - schedule일 경우 반드시 cron 필드 포함 (예: "0 10 * * 1" = 매주 월요일 10시)
+
+- **ai_agent**: AI 처리 (config: name, model, prompt)
+  - model: "gpt-4o" | "gpt-4o-mini" | "claude-sonnet-4-6"
+
+- **api_call**: API 호출 (config: name, url, method)
+- **condition**: 조건 분기 (config: name)
+- **transform**: 데이터 변환 (config: name)
+- **slack**: Slack 메시지 (config: name, message)
+- **discord**: Discord 메시지 (config: name, message)
+- **telegram**: Telegram 메시지 (config: name, message)
+- **rss_feed**: RSS 피드 수집 (config: name, url, limit)
+- **notion**: Notion 저장 (config: name, title, content)
+- **email**: 이메일 발송 (config: name, to, subject, body)
+- **output**: 출력 (config: name)
+
+## 중요한 규칙
+
+### 메시지 작성 규칙
+- **단순 알림(스케줄+알림)**: 메시지를 고정 텍스트로 직접 작성. 예: \`"message": "💪 운동할 시간입니다! 오늘도 파이팅!"\`
+- **이전 노드 결과 사용 시**: \`{{input.result}}\` 변수 사용. 단, 반드시 앞에 ai_agent나 api_call 노드가 연결되어 있어야 함
+- **절대 금지**: 앞에 ai_agent 없이 discord/slack/telegram 노드에서 \`{{input.result}}\` 사용 금지
+
+### Cron 표현식 예시
+- 매주 월요일 오전 10시: \`"0 10 * * 1"\`
+- 매일 오전 9시: \`"0 9 * * *"\`
+- 매일 오전 8시: \`"0 8 * * *"\`
+- 매주 월~금 오전 9시: \`"0 9 * * 1-5"\`
+- 5분마다: \`"*/5 * * * *"\`
+
+### 레이아웃
+- 노드 x좌표: 80부터 시작, 320씩 증가
+- 노드 y좌표: 기본 200, 병렬 분기 시 위 120 / 아래 320
+
+## 예시 패턴
+
+### 단순 스케줄 알림 (트리거 → 알림 직접)
+"매주 월요일 10시 운동 알람을 디스코드로" →
+\`\`\`workflow
+{"name":"월요일 운동 알람","nodes":[{"id":"n1","type":"trigger","x":80,"y":200,"config":{"name":"매주 월요일 10시","triggerType":"schedule","cron":"0 10 * * 1"}},{"id":"n2","type":"discord","x":400,"y":200,"config":{"name":"디스코드 알림","message":"💪 운동할 시간이에요! 오늘도 파이팅! 🏋️"}}],"edges":[["n1","n2"]]}
+\`\`\`
+
+### RSS → AI 요약 → Slack
+"매일 아침 뉴스 요약을 슬랙으로" →
+\`\`\`workflow
+{"name":"뉴스 요약 슬랙","nodes":[{"id":"n1","type":"trigger","x":80,"y":200,"config":{"name":"매일 9시","triggerType":"schedule","cron":"0 9 * * *"}},{"id":"n2","type":"rss_feed","x":400,"y":200,"config":{"name":"뉴스 수집","url":"https://feeds.bbci.co.uk/korean/rss.xml","limit":5}},{"id":"n3","type":"ai_agent","x":720,"y":200,"config":{"name":"AI 요약","model":"gpt-4o-mini","prompt":"뉴스를 3줄로 요약해주세요:\\n\\n{{input.items}}"}},{"id":"n4","type":"slack","x":1040,"y":200,"config":{"name":"슬랙 전송","message":"📰 오늘의 뉴스\\n\\n{{input.result}}"}}],"edges":[["n1","n2"],["n2","n3"],["n3","n4"]]}
+\`\`\`
+
+친절하게 한국어로 답변하세요. 워크플로우 생성 후 "캔버스에 추가" 버튼을 누르면 바로 적용된다고 안내해주세요.`;
 
 export default function ChatModal({ onClose, onCreateWorkflow }) {
   const [messages, setMessages] = useState([]);
