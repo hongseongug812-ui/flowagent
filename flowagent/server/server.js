@@ -170,6 +170,22 @@ app.post("/api/webhook/:token", async (req, res) => {
   executeWorkflow(wf.id, wf.userId, fakeWs, req.body);
 });
 
+// ── Node test endpoint ────────────────────────────────────────
+app.post("/api/nodes/test", authMiddleware, async (req, res) => {
+  const { node, input } = req.body;
+  if (!node || !node.type) return res.status(400).json({ error: "node required" });
+  const executor = NODE_EXECUTORS[node.type];
+  if (!executor) return res.status(400).json({ error: `Unknown node type: ${node.type}` });
+  const userSettings = db.getSettings(req.user.id);
+  try {
+    const start = Date.now();
+    const result = await executor(node, input || null, { userSettings });
+    res.json({ ok: true, output: result.output, duration: Date.now() - start });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 // ── Waitlist (public) ─────────────────────────────────────────
 app.post("/api/waitlist", (req, res) => {
   const { email } = req.body;
@@ -523,87 +539,141 @@ const NODE_EXECUTORS = {
   },
 
   ai_agent: async (node, input, ctx) => {
-    const userKey = ctx?.userSettings?.openai_api_key;
-    if (!userKey && !process.env.OPENAI_API_KEY) {
-      throw new Error("OpenAI API 키가 없습니다. ⚙ 설정 → OpenAI API Key를 입력하세요.");
-    }
-    const client = userKey ? new OpenAI({ apiKey: userKey }) : openai;
-    const model = node.config?.model === "gpt-4o" || !node.config?.model?.startsWith("claude")
-      ? (node.config?.model || OPENAI_MODEL)
-      : OPENAI_MODEL;
-    const prompt = node.config?.prompt || "Process this input";
-    const userContent = input ? `Input:\n${JSON.stringify(input, null, 2)}\n\n${prompt}` : prompt;
+    const model = node.config?.model || "gpt-4o-mini";
+    const isClaude = model.startsWith("claude");
+    const prompt = node.config?.prompt || "입력 데이터를 처리해주세요.";
+    const systemPrompt = node.config?.system_prompt || "";
+    const temperature = node.config?.temperature ?? 0.7;
+    const maxTokens = node.config?.max_tokens ?? 1000;
+    const inputText = input ? `\n\n입력 데이터:\n${JSON.stringify(input, null, 2)}` : "";
+    const userContent = prompt + inputText;
 
-    const response = await client.chat.completions.create({
-      model,
-      messages: [{ role: "user", content: userContent }],
-      temperature: node.config?.temperature ?? 0.7,
-    });
-
-    const result = response.choices[0].message.content;
-    const tokens = response.usage?.total_tokens ?? 0;
-
-    return {
-      output: {
+    if (isClaude) {
+      const anthropicKey = ctx?.userSettings?.anthropic_api_key || process.env.ANTHROPIC_API_KEY;
+      if (!anthropicKey) throw new Error("Anthropic API 키가 없습니다. ⚙ 설정 → Anthropic API Key를 입력하세요.");
+      const anthropic = new Anthropic({ apiKey: anthropicKey });
+      const response = await anthropic.messages.create({
         model,
-        tokens,
-        result,
-        input_preview: JSON.stringify(input).slice(0, 100),
-      },
-    };
+        max_tokens: maxTokens,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        messages: [{ role: "user", content: userContent }],
+        temperature,
+      });
+      const result = response.content[0]?.text || "";
+      return { output: { model, result, tokens: response.usage?.input_tokens + response.usage?.output_tokens, provider: "anthropic" } };
+    } else {
+      const openaiKey = ctx?.userSettings?.openai_api_key || process.env.OPENAI_API_KEY;
+      if (!openaiKey) throw new Error("OpenAI API 키가 없습니다. ⚙ 설정 → OpenAI API Key를 입력하세요.");
+      const client = new OpenAI({ apiKey: openaiKey });
+      const messages = [];
+      if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+      messages.push({ role: "user", content: userContent });
+      const response = await client.chat.completions.create({ model, messages, temperature, max_tokens: maxTokens });
+      const result = response.choices[0].message.content;
+      return { output: { model, result, tokens: response.usage?.total_tokens, provider: "openai" } };
+    }
   },
 
   api_call: async (node, input) => {
-    const url = node.config?.url;
+    const url = resolveTemplate(node.config?.url || "", input);
     if (!url || url.trim() === "" || url === "https://api.example.com") {
       throw new Error("API URL이 설정되지 않았습니다. 노드를 클릭해 URL을 입력하세요.");
     }
     const method = (node.config?.method || "GET").toUpperCase();
-    const headers = node.config?.headers ? JSON.parse(node.config.headers) : {};
     const hasBody = method !== "GET" && method !== "HEAD";
+    const timeout = (node.config?.timeout || 30) * 1000;
+
+    // Build headers
+    const headers = {};
+    try { Object.assign(headers, node.config?.headers ? JSON.parse(node.config.headers) : {}); } catch {}
+    // Auth
+    const authType = node.config?.auth_type || "none";
+    if (authType === "bearer" && node.config?.auth_value) headers["Authorization"] = `Bearer ${node.config.auth_value}`;
+    else if (authType === "apikey" && node.config?.auth_key && node.config?.auth_value) headers[node.config.auth_key] = node.config.auth_value;
+    else if (authType === "basic" && node.config?.auth_value) headers["Authorization"] = `Basic ${Buffer.from(node.config.auth_value).toString("base64")}`;
+
+    // Build body
+    let reqBody;
+    if (hasBody) {
+      if (node.config?.body) {
+        try { reqBody = JSON.stringify(JSON.parse(resolveTemplate(node.config.body, input))); }
+        catch { reqBody = resolveTemplate(node.config.body, input); }
+      } else if (input) {
+        reqBody = JSON.stringify(input);
+      }
+    }
 
     const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
     let res;
     try {
       res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json", ...headers },
-        ...(hasBody && input ? { body: JSON.stringify(input) } : {}),
+        signal: controller.signal,
+        ...(hasBody && reqBody ? { body: reqBody } : {}),
       });
     } catch (e) {
-      throw new Error(`API 호출 실패: ${e.message} (URL: ${url})`);
+      clearTimeout(timer);
+      throw new Error(e.name === "AbortError" ? `API 타임아웃 (${timeout/1000}초)` : `API 호출 실패: ${e.message}`);
     }
+    clearTimeout(timer);
     const responseTime = Date.now() - start;
+
     let body;
     const ct = res.headers.get("content-type") || "";
-    try {
-      body = ct.includes("application/json") ? await res.json() : await res.text();
-    } catch {
-      body = await res.text();
+    try { body = ct.includes("application/json") ? await res.json() : await res.text(); }
+    catch { body = await res.text(); }
+
+    if (!res.ok) throw new Error(`HTTP ${res.status} 오류: ${typeof body === "string" ? body.slice(0, 300) : JSON.stringify(body).slice(0, 300)}`);
+
+    // JSONPath 추출
+    let extracted = body;
+    if (node.config?.extract_path) {
+      try {
+        const matches = JSONPath({ path: node.config.extract_path, json: body });
+        extracted = matches.length === 1 ? matches[0] : matches;
+      } catch {}
     }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} 오류: ${typeof body === "string" ? body.slice(0, 200) : JSON.stringify(body).slice(0, 200)}`);
-    }
-    return { output: { status: res.status, url, method, responseTime, body } };
+
+    return { output: { status: res.status, url, method, responseTime: `${responseTime}ms`, body: extracted, raw: body } };
   },
 
   condition: async (node, input) => {
-    const expr = node.config?.expression || "$..*";
-    const operator = node.config?.operator || "exists";
-    const expected = node.config?.value;
+    const conditions = node.config?.conditions || [{ field: "$..*", operator: "exists", value: "" }];
+    const logic = node.config?.logic || "AND"; // AND | OR
 
-    let result = false;
-    try {
-      const matches = JSONPath({ path: expr, json: input ?? {} });
-      if (operator === "exists") result = matches.length > 0;
-      else if (operator === "equals") result = String(matches[0]) === String(expected);
-      else if (operator === "contains") result = String(matches[0]).includes(String(expected));
-      else if (operator === "gt") result = Number(matches[0]) > Number(expected);
-      else if (operator === "lt") result = Number(matches[0]) < Number(expected);
-    } catch {
-      result = false;
-    }
-    return { output: { condition: result, branch: result ? "true" : "false", input }, branch: result ? "true" : "false" };
+    const evaluateOne = (cond) => {
+      const { field, operator, value } = cond;
+      try {
+        const matches = JSONPath({ path: field || "$..*", json: input ?? {} });
+        const actual = matches[0];
+        switch (operator) {
+          case "exists":    return matches.length > 0;
+          case "not_exists":return matches.length === 0;
+          case "equals":    return String(actual) === String(value);
+          case "not_equals":return String(actual) !== String(value);
+          case "contains":  return String(actual).includes(String(value));
+          case "not_contains": return !String(actual).includes(String(value));
+          case "gt":        return Number(actual) > Number(value);
+          case "gte":       return Number(actual) >= Number(value);
+          case "lt":        return Number(actual) < Number(value);
+          case "lte":       return Number(actual) <= Number(value);
+          case "starts_with": return String(actual).startsWith(String(value));
+          case "ends_with":   return String(actual).endsWith(String(value));
+          case "regex":     return new RegExp(value).test(String(actual));
+          default:          return false;
+        }
+      } catch { return false; }
+    };
+
+    const results = conditions.map(evaluateOne);
+    const passed = logic === "OR" ? results.some(Boolean) : results.every(Boolean);
+    return {
+      output: { condition: passed, branch: passed ? "true" : "false", evaluated: results, input },
+      branch: passed ? "true" : "false",
+    };
   },
 
   transform: async (node, input) => {
@@ -611,11 +681,21 @@ const NODE_EXECUTORS = {
     let output;
     try {
       // eslint-disable-next-line no-new-func
-      const fn = new Function("input", code);
-      output = fn(input);
+      const fn = new Function("input", "_", code);
+      // 유틸 함수 제공
+      const utils = {
+        pick: (obj, keys) => keys.reduce((a, k) => { a[k] = obj?.[k]; return a; }, {}),
+        omit: (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k))),
+        flatten: (arr) => arr.flat(),
+        unique: (arr) => [...new Set(arr)],
+        format: (date) => new Date(date).toLocaleString("ko-KR"),
+        toArray: (v) => Array.isArray(v) ? v : [v],
+      };
+      output = fn(input, utils);
     } catch (err) {
       throw new Error(`Transform 오류: ${err.message}`);
     }
+    if (output === undefined) output = input;
     return { output };
   },
 
@@ -635,12 +715,33 @@ const NODE_EXECUTORS = {
   discord: async (node, input, ctx) => {
     const webhookUrl = node.config?.webhook_url || ctx?.userSettings?.discord_webhook_url;
     if (!webhookUrl) throw new Error("Discord Webhook URL이 없습니다. 노드 설정 또는 ⚙ 설정에서 입력하세요.");
-    const message = resolveTemplate(node.config?.message || "{{input.result}}", input);
+    const message = resolveTemplate(node.config?.message || "", input);
+    const payload = {
+      username: node.config?.username || "FlowAgent",
+      avatar_url: node.config?.avatar_url || undefined,
+    };
+    // Embed 지원
+    if (node.config?.use_embed) {
+      const embed = {
+        title: resolveTemplate(node.config?.embed_title || "", input),
+        description: resolveTemplate(node.config?.embed_description || message, input),
+        color: parseInt((node.config?.embed_color || "#8B5CF6").replace("#", ""), 16),
+        timestamp: new Date().toISOString(),
+        footer: { text: "FlowAgent" },
+      };
+      if (node.config?.embed_url) embed.url = node.config.embed_url;
+      payload.embeds = [embed];
+    } else {
+      payload.content = message || JSON.stringify(input).slice(0, 2000);
+    }
     const res = await fetch(webhookUrl, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: message, username: node.config?.username || "FlowAgent" }),
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`Discord 전송 실패: ${res.status}`);
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.status);
+      throw new Error(`Discord 전송 실패 (${res.status}): ${String(err).slice(0, 200)}`);
+    }
     return { output: { sent: true, platform: "discord", message } };
   },
 
@@ -748,8 +849,14 @@ const NODE_EXECUTORS = {
   },
 
   output: async (node, input) => {
-    await sleep(200 + rand(200));
-    return { output: { delivered: true, data: input } };
+    const format = node.config?.format || "json";
+    let formatted;
+    if (format === "text") formatted = typeof input === "string" ? input : JSON.stringify(input, null, 2);
+    else if (format === "summary" && input) {
+      const keys = Object.keys(input);
+      formatted = keys.map(k => `${k}: ${String(input[k]).slice(0, 100)}`).join("\n");
+    } else formatted = input;
+    return { output: { delivered: true, format, data: formatted, timestamp: new Date().toISOString() } };
   },
 };
 
