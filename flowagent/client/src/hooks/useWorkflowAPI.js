@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { API_BASE } from "../utils/constants";
 import { toast } from "../utils/toast";
 
@@ -14,6 +14,10 @@ export function useWorkflowAPI() {
   const [workflows, setWorkflows] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [autoSaved, setAutoSaved] = useState(null); // timestamp of last auto-save
+  const autoSaveTimer = useRef(null);
+  const currentIdRef = useRef(null);
+  currentIdRef.current = currentId;
 
   const fetchWorkflows = useCallback(async () => {
     try {
@@ -35,23 +39,34 @@ export function useWorkflowAPI() {
     } catch { return null; }
   }, []);
 
-  const saveWorkflow = useCallback(async (name, nodes, edges) => {
+  const saveWorkflow = useCallback(async (name, nodes, edges, silent = false) => {
     setSaving(true);
     try {
-      const url = currentId ? `${API_BASE}/workflows/${currentId}` : `${API_BASE}/workflows`;
-      const method = currentId ? "PUT" : "POST";
+      const id = currentIdRef.current;
+      const url = id ? `${API_BASE}/workflows/${id}` : `${API_BASE}/workflows`;
+      const method = id ? "PUT" : "POST";
       const res = await fetch(url, {
         method,
         headers: authHeaders(),
         body: JSON.stringify({ name, nodes, edges }),
       });
       const data = await res.json();
-      if (!currentId) setCurrentId(data.id);
-      toast.success("저장됐습니다");
+      if (!id) setCurrentId(data.id);
+      if (!silent) toast.success("저장됐습니다");
+      else setAutoSaved(new Date());
       return data;
-    } catch { toast.error("저장 실패"); return null; }
+    } catch { if (!silent) toast.error("저장 실패"); return null; }
     finally { setSaving(false); }
-  }, [currentId]);
+  }, []);
+
+  // Auto-save with 3s debounce
+  const scheduleAutoSave = useCallback((name, nodes, edges) => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      if (!currentIdRef.current) return; // 저장된 워크플로우만 자동저장
+      await saveWorkflow(name, nodes, edges, true);
+    }, 3000);
+  }, [saveWorkflow]);
 
   const deleteWorkflow = useCallback(async (id) => {
     try {
@@ -76,5 +91,5 @@ export function useWorkflowAPI() {
     } catch { toast.error("복제 실패"); }
   }, [fetchWorkflows]);
 
-  return { workflows, currentId, saving, fetchWorkflows, loadWorkflow, saveWorkflow, deleteWorkflow, newWorkflow, duplicateWorkflow };
+  return { workflows, currentId, saving, autoSaved, fetchWorkflows, loadWorkflow, saveWorkflow, scheduleAutoSave, deleteWorkflow, newWorkflow, duplicateWorkflow };
 }

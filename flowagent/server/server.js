@@ -8,12 +8,20 @@ const OpenAI = require("openai");
 const Anthropic = require("@anthropic-ai/sdk");
 const fetch = require("node-fetch");
 const { JSONPath } = require("jsonpath-plus");
+const rateLimit = require("express-rate-limit");
+const helmet = require("helmet");
 
 const db = require("./db");
 const { router: authRouter, authMiddleware, checkRunLimit } = require("./auth");
 const jwt = require("jsonwebtoken");
 const cron = require("node-cron");
 const JWT_SECRET = process.env.JWT_SECRET || "flowagent-dev-secret";
+
+// ── Security warning ──────────────────────────────────────────
+if (process.env.NODE_ENV === "production" && JWT_SECRET === "flowagent-dev-secret") {
+  console.error("⚠️  FATAL: JWT_SECRET is using default dev value in production! Set a strong secret in .env");
+  process.exit(1);
+}
 
 // ── Cron registry ─────────────────────────────────────────────
 const cronJobs = new Map(); // workflowId → ScheduledTask
@@ -43,10 +51,43 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// ── Security middleware ───────────────────────────────────────
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(express.json({ limit: "1mb" }));
+app.use(cors({ origin: true, credentials: true }));
+app.set("trust proxy", 1);
+
+// ── Rate limiters ─────────────────────────────────────────────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 20, // 20 auth requests per 15 min
+  message: { error: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." },
+  standardHeaders: true, legacyHeaders: false,
+});
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 200, // 200 API requests per minute
+  message: { error: "API 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요." },
+  standardHeaders: true, legacyHeaders: false,
+});
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 20, // 20 AI chat requests per minute
+  message: { error: "AI 채팅 요청이 너무 많습니다. 잠시 후 다시 시도하세요." },
+  standardHeaders: true, legacyHeaders: false,
+});
+
+// ── Health check ──────────────────────────────────────────────
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    version: "1.0.0",
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    db: db ? "connected" : "disconnected",
+  });
+});
+
 // ── Auth ─────────────────────────────────────────────────────
-app.use(express.json());
-app.use(cors());
-app.use("/api/auth", authRouter);
+app.use("/api/auth", authLimiter, authRouter);
+app.use("/api", apiLimiter);
 
 // ── REST API (protected) ─────────────────────────────────────
 
@@ -216,7 +257,7 @@ app.put("/api/settings", authMiddleware, (req, res) => {
 });
 
 // ── AI Chat (personal assistant) ──────────────────────────────
-app.post("/api/chat", authMiddleware, async (req, res) => {
+app.post("/api/chat", chatLimiter, authMiddleware, async (req, res) => {
   const { messages, model, systemPrompt } = req.body;
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "messages required" });
@@ -917,11 +958,37 @@ const scheduledWfs = db.listScheduledWorkflows();
 scheduledWfs.forEach(registerCron);
 if (scheduledWfs.length) console.log(`  ✓ Restored ${scheduledWfs.length} cron job(s)`);
 
+// ── Global error handler ──────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error("[Server Error]", err.message);
+  res.status(err.status || 500).json({ error: err.message || "서버 오류가 발생했습니다" });
+});
+
+// ── 404 handler ───────────────────────────────────────────────
+app.use((req, res) => {
+  if (req.path.startsWith("/api/")) {
+    res.status(404).json({ error: `API not found: ${req.method} ${req.path}` });
+  }
+});
+
 // ── Start ────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`\n  ◆ FlowAgent Server`);
   console.log(`  ├─ REST API:   http://localhost:${PORT}/api`);
-  console.log(`  └─ WebSocket:  ws://localhost:${PORT}/ws\n`);
+  console.log(`  ├─ WebSocket:  ws://localhost:${PORT}/ws`);
+  console.log(`  └─ Health:     http://localhost:${PORT}/api/health\n`);
+});
+
+// ── Graceful shutdown ─────────────────────────────────────────
+process.on("SIGTERM", () => {
+  console.log("[Server] SIGTERM received, shutting down...");
+  server.close(() => { console.log("[Server] HTTP server closed"); process.exit(0); });
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Server] Uncaught Exception:", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[Server] Unhandled Rejection:", reason);
 });

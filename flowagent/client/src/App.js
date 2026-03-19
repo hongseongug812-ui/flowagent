@@ -8,7 +8,7 @@ import EdgeLine from "./components/EdgeLine";
 import Sidebar from "./components/Sidebar";
 import ConfigPanel from "./components/ConfigPanel";
 import LogPanel from "./components/LogPanel";
-import AuthModal from "./components/AuthModal";
+import LandingPage from "./components/LandingPage";
 import SettingsModal from "./components/SettingsModal";
 import CalendarModal from "./components/CalendarModal";
 import HistoryModal from "./components/HistoryModal";
@@ -55,6 +55,14 @@ export default function App() {
 
   const { connected, runState, logs, runWorkflow, clearLogs } = useWebSocket();
   const api = useWorkflowAPI();
+
+  // Auto-save whenever nodes/edges/name change (after initial load)
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    if (!user) return;
+    api.scheduleAutoSave(workflowName, nodes, edges);
+  }, [nodes, edges, workflowName]); // eslint-disable-line
 
   // Load saved workflows on mount; show onboarding if first time
   useEffect(() => {
@@ -312,6 +320,22 @@ export default function App() {
     if (!hasTrigger) { toast.error("트리거 노드가 없습니다. Trigger 노드를 추가하세요."); return; }
     if (nodes.length < 2) { toast.warn("노드가 너무 적습니다. 최소 2개 이상 연결하세요."); return; }
     if (edges.length === 0) { toast.warn("연결된 노드가 없습니다. 노드를 엣지로 연결하세요."); return; }
+
+    // 노드별 필수 설정 검사
+    for (const n of nodes) {
+      if (n.type === "api_call" && !n.config?.url) {
+        toast.warn(`"${n.config?.name || "API Call"}" 노드에 URL이 없습니다.`);
+        setSelected(n.id); setShowConfig(true); return;
+      }
+      if (n.type === "ai_agent" && !n.config?.prompt) {
+        toast.warn(`"${n.config?.name || "AI Agent"}" 노드에 프롬프트가 없습니다.`);
+        setSelected(n.id); setShowConfig(true); return;
+      }
+      if (n.type === "rss_feed" && !n.config?.url) {
+        toast.warn(`"${n.config?.name || "RSS Feed"}" 노드에 RSS URL이 없습니다.`);
+        setSelected(n.id); setShowConfig(true); return;
+      }
+    }
     await handleRun();
   };
 
@@ -355,7 +379,7 @@ export default function App() {
     return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
   }, [selected, runState.running, nodes, edges]); // eslint-disable-line
 
-  if (!user) return <AuthModal />;
+  if (!user) return <LandingPage />;
 
   return (
     <div style={{ width: "100%", height: "100vh", display: "flex", overflow: "hidden" }}>
@@ -412,6 +436,12 @@ export default function App() {
           <span style={{ fontSize: 11, color: "#666" }}>노드 {nodes.length}</span>
           <span style={{ fontSize: 11, color: "#444" }}>·</span>
           <span style={{ fontSize: 11, color: "#666" }}>연결 {edges.length}</span>
+          {api.saving && <span style={{ fontSize: 10, color: "#8B5CF6" }}>저장 중...</span>}
+          {!api.saving && api.autoSaved && (
+            <span style={{ fontSize: 10, color: "#444" }} title={`자동저장: ${api.autoSaved.toLocaleTimeString()}`}>
+              ✓ 자동저장됨
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 11, color: "#555" }}>{user.email}</span>
           <span style={{ fontSize: 11, color: user.plan === "free" ? "#F59E0B" : "#8B5CF6" }}>
