@@ -858,6 +858,95 @@ const NODE_EXECUTORS = {
     } else formatted = input;
     return { output: { delivered: true, format, data: formatted, timestamp: new Date().toISOString() } };
   },
+
+  // ── 새 노드 타입 ───────────────────────────────────────────
+
+  filter: async (node, input) => {
+    // 배열에서 조건에 맞는 항목만 통과
+    const raw = input?.items ?? input;
+    const items = Array.isArray(raw) ? raw : [raw].filter(Boolean);
+    const field = node.config?.field || "$..*";
+    const operator = node.config?.operator || "exists";
+    const value = node.config?.value ?? "";
+
+    const filtered = items.filter(item => {
+      try {
+        const matches = JSONPath({ path: field, json: item });
+        const actual = matches[0];
+        switch (operator) {
+          case "exists":      return matches.length > 0;
+          case "not_exists":  return matches.length === 0;
+          case "equals":      return String(actual) === String(value);
+          case "not_equals":  return String(actual) !== String(value);
+          case "contains":    return String(actual ?? "").toLowerCase().includes(String(value).toLowerCase());
+          case "not_contains":return !String(actual ?? "").toLowerCase().includes(String(value).toLowerCase());
+          case "gt":          return Number(actual) > Number(value);
+          case "gte":         return Number(actual) >= Number(value);
+          case "lt":          return Number(actual) < Number(value);
+          case "lte":         return Number(actual) <= Number(value);
+          case "starts_with": return String(actual ?? "").startsWith(String(value));
+          case "ends_with":   return String(actual ?? "").endsWith(String(value));
+          case "regex":       return new RegExp(value, "i").test(String(actual ?? ""));
+          default:            return true;
+        }
+      } catch { return true; }
+    });
+    return { output: { items: filtered, count: filtered.length, total: items.length, filtered_out: items.length - filtered.length } };
+  },
+
+  loop: async (node, input) => {
+    // 배열의 각 항목에 JS 코드를 적용
+    const raw = input?.items ?? input;
+    const items = Array.isArray(raw) ? raw : [raw].filter(Boolean);
+    const code = node.config?.code || "return item;";
+    const limit = Math.min(node.config?.limit || 100, 500);
+
+    const utils = {
+      pick: (obj, keys) => keys.reduce((a, k) => { a[k] = obj?.[k]; return a; }, {}),
+      omit: (obj, keys) => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => !keys.includes(k))),
+      format: (date) => new Date(date).toLocaleString("ko-KR"),
+      trim: (s, n = 200) => String(s || "").slice(0, n),
+    };
+
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("item", "index", "_", code);
+    const results = [];
+    const errors = [];
+
+    for (let i = 0; i < Math.min(items.length, limit); i++) {
+      try {
+        const r = fn(items[i], i, utils);
+        results.push(r ?? items[i]);
+      } catch (e) {
+        errors.push({ index: i, error: e.message });
+        results.push(items[i]); // keep original on error
+      }
+    }
+
+    return { output: { items: results, count: results.length, original_count: items.length, errors } };
+  },
+
+  delay: async (node) => {
+    const seconds = Math.min(Math.max(node.config?.seconds || 1, 0), 300); // max 5 min
+    await sleep(seconds * 1000);
+    return { output: { waited_seconds: seconds, timestamp: new Date().toISOString() } };
+  },
+
+  http_response: async (node, input) => {
+    // 웹훅 호출자에게 응답 데이터를 기록 (실제 응답은 webhook 엔드포인트에서 처리됨)
+    const status = node.config?.status || 200;
+    const message = resolveTemplate(node.config?.message || "", input);
+    const includeData = node.config?.include_data !== false;
+    return {
+      output: {
+        http_status: status,
+        message,
+        ...(includeData ? { data: input } : {}),
+        timestamp: new Date().toISOString(),
+      },
+      _httpResponse: { status, body: message || input },
+    };
+  },
 };
 
 function resolveTemplate(template, input) {
@@ -901,6 +990,36 @@ function topoSort(nodes, edges) {
   return sorted;
 }
 
+// 같은 depth(레벨)의 노드들을 그룹으로 묶어 병렬 실행 지원
+function topoLevels(nodes, edges) {
+  const adj = new Map();
+  const inDeg = new Map();
+  nodes.forEach(n => { adj.set(n.id, []); inDeg.set(n.id, 0); });
+  edges.forEach(([from, to]) => {
+    adj.get(from)?.push(to);
+    inDeg.set(to, (inDeg.get(to) || 0) + 1);
+  });
+  const levels = [];
+  let current = nodes.filter(n => inDeg.get(n.id) === 0);
+  const visited = new Set();
+  while (current.length) {
+    levels.push(current);
+    current.forEach(n => visited.add(n.id));
+    const next = [];
+    current.forEach(n => {
+      (adj.get(n.id) || []).forEach(nid => {
+        inDeg.set(nid, inDeg.get(nid) - 1);
+        if (inDeg.get(nid) === 0 && !visited.has(nid)) {
+          const node = nodes.find(nd => nd.id === nid);
+          if (node) next.push(node);
+        }
+      });
+    });
+    current = next;
+  }
+  return levels;
+}
+
 async function executeWorkflow(workflowId, userId, ws, webhookPayload = null) {
   const wf = db.getWorkflow(workflowId);
   if (!wf || wf.userId !== userId) {
@@ -933,44 +1052,77 @@ async function executeWorkflow(workflowId, userId, ws, webhookPayload = null) {
 
   send("execution:start", { workflowId, workflowName: wf.name });
 
-  const sorted = topoSort(wf.nodes, wf.edges);
+  const levels = topoLevels(wf.nodes, wf.edges);
   const outputs = new Map();
+  let failed = false;
 
-  for (const node of sorted) {
-    const nodeType = node.type;
-    const executor = NODE_EXECUTORS[nodeType];
-    if (!executor) continue;
+  for (const levelNodes of levels) {
+    if (failed) break;
 
-    // Gather inputs from parent nodes
-    const parentEdges = wf.edges.filter(([, to]) => to === node.id);
-    const input = parentEdges.length > 0
-      ? parentEdges.map(([from]) => outputs.get(from)).filter(Boolean)
-      : null;
-    const mergedInput = input && input.length === 1 ? input[0] : input;
+    // 같은 레벨의 노드는 병렬로 실행
+    const levelResults = await Promise.allSettled(
+      levelNodes.map(async (node) => {
+        const nodeType = node.type;
+        const executor = NODE_EXECUTORS[nodeType];
+        if (!executor) return;
 
-    send("node:start", { nodeId: node.id, nodeType, nodeName: node.config?.name || nodeType });
+        // Gather inputs from parent nodes
+        const parentEdges = wf.edges.filter(([, to]) => to === node.id);
+        const input = parentEdges.length > 0
+          ? parentEdges.map(([from]) => outputs.get(from)).filter(Boolean)
+          : null;
+        const mergedInput = input && input.length === 1 ? input[0] : input;
 
-    const log = (msg) => {
-      const entry = { time: new Date().toISOString(), nodeId: node.id, msg };
-      execution.logs.push(entry);
-      send("log", entry);
-    };
+        send("node:start", { nodeId: node.id, nodeType, nodeName: node.config?.name || nodeType });
 
-    try {
-      log(`▶ ${node.config?.name || nodeType} 실행 시작`);
-      const result = await executor(node, mergedInput, { webhookPayload, userSettings });
-      outputs.set(node.id, result.output);
-      execution.nodeResults[node.id] = { status: "done", output: result.output };
-      log(`✓ ${node.config?.name || nodeType} 완료`);
-      send("node:done", { nodeId: node.id, result: result.output });
-    } catch (err) {
-      execution.nodeResults[node.id] = { status: "error", error: err.message };
-      log(`✗ ${node.config?.name || nodeType} 오류: ${err.message}`);
-      send("node:error", { nodeId: node.id, error: err.message });
-      execution.status = "failed";
-      db.saveExecution({ id: execId, status: "failed", completedAt: new Date().toISOString(), nodeResults: execution.nodeResults, logs: execution.logs });
-      send("execution:error", { error: err.message });
-      return;
+        const log = (msg) => {
+          const entry = { time: new Date().toISOString(), nodeId: node.id, msg };
+          execution.logs.push(entry);
+          send("log", entry);
+        };
+
+        // 재시도 로직
+        const retryCount = Math.min(node.config?.retry_count || 0, 5);
+        const retryDelay = Math.min(node.config?.retry_delay_ms || 2000, 30000);
+        let lastError;
+
+        for (let attempt = 0; attempt <= retryCount; attempt++) {
+          try {
+            if (attempt > 0) {
+              const wait = retryDelay * attempt;
+              log(`↺ 재시도 ${attempt}/${retryCount} (${wait}ms 대기)`);
+              send("log", { time: new Date().toISOString(), nodeId: node.id, msg: `↺ 재시도 ${attempt}/${retryCount}` });
+              await sleep(wait);
+            }
+            log(`▶ ${node.config?.name || nodeType} 실행${attempt > 0 ? ` (재시도 ${attempt})` : ""}`);
+            const result = await executor(node, mergedInput, { webhookPayload, userSettings });
+            outputs.set(node.id, result.output);
+            execution.nodeResults[node.id] = { status: "done", output: result.output };
+            log(`✓ ${node.config?.name || nodeType} 완료`);
+            send("node:done", { nodeId: node.id, result: result.output });
+            return; // success
+          } catch (err) {
+            lastError = err;
+          }
+        }
+
+        // All retries exhausted
+        execution.nodeResults[node.id] = { status: "error", error: lastError.message };
+        log(`✗ ${node.config?.name || nodeType} 오류: ${lastError.message}`);
+        send("node:error", { nodeId: node.id, error: lastError.message });
+        throw lastError;
+      })
+    );
+
+    // 레벨 내 실패 노드 확인
+    for (const r of levelResults) {
+      if (r.status === "rejected") {
+        failed = true;
+        execution.status = "failed";
+        db.saveExecution({ id: execId, status: "failed", completedAt: new Date().toISOString(), nodeResults: execution.nodeResults, logs: execution.logs });
+        send("execution:error", { error: r.reason?.message || "Unknown error" });
+        break;
+      }
     }
   }
 

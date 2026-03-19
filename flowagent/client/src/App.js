@@ -32,6 +32,11 @@ export default function App() {
   const [nodes, setNodes] = useState(INITIAL_NODES);
   const [edges, setEdges] = useState(INITIAL_EDGES);
   const [selected, setSelected] = useState(null);
+  // Undo/Redo history
+  const [historyStack, setHistoryStack] = useState([]);
+  const [futureStack, setFutureStack] = useState([]);
+  // Copy/Paste clipboard
+  const [clipboard, setClipboard] = useState(null);
   const [dragging, setDragging] = useState(null);
   const [dragOff, setDragOff] = useState({ x: 0, y: 0 });
   const [connecting, setConnecting] = useState(null);
@@ -79,6 +84,34 @@ export default function App() {
       .then(data => { if (data.runCount !== undefined) setRunCount(data.runCount); })
       .catch(() => {});
   }, [user]); // eslint-disable-line
+
+  // ── Undo / Redo ──────────────────────────────────────────────
+  const pushHistory = useCallback((prevNodes, prevEdges) => {
+    setHistoryStack(h => [...h.slice(-29), { nodes: prevNodes, edges: prevEdges }]);
+    setFutureStack([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    setHistoryStack(h => {
+      if (!h.length) { toast.warn("더 이상 되돌릴 수 없습니다"); return h; }
+      const prev = h[h.length - 1];
+      setFutureStack(f => [{ nodes, edges }, ...f.slice(0, 29)]);
+      setNodes(prev.nodes);
+      setEdges(prev.edges);
+      return h.slice(0, -1);
+    });
+  }, [nodes, edges]); // eslint-disable-line
+
+  const redo = useCallback(() => {
+    setFutureStack(f => {
+      if (!f.length) { toast.warn("더 이상 앞으로 갈 수 없습니다"); return f; }
+      const next = f[0];
+      setHistoryStack(h => [...h.slice(-29), { nodes, edges }]);
+      setNodes(next.nodes);
+      setEdges(next.edges);
+      return f.slice(1);
+    });
+  }, [nodes, edges]); // eslint-disable-line
 
   // ── Drag ────────────────────────────────────────────────────
   const handleDragStart = useCallback((e, id) => {
@@ -153,14 +186,16 @@ export default function App() {
 
   const handleConnectEnd = useCallback((id) => {
     if (connecting && connecting !== id && !edges.some(([a, b]) => a === connecting && b === id)) {
+      pushHistory(nodes, edges);
       setEdges((prev) => [...prev, [connecting, id]]);
     }
     setConnecting(null);
     setConnLine(null);
-  }, [connecting, edges]);
+  }, [connecting, edges, nodes, pushHistory]);
 
   // ── Node operations ─────────────────────────────────────────
   const addNode = (type) => {
+    pushHistory(nodes, edges);
     const id = uid();
     setNodes((prev) => [
       ...prev,
@@ -177,6 +212,7 @@ export default function App() {
 
   const deleteSelected = () => {
     if (!selected) return;
+    pushHistory(nodes, edges);
     setNodes((prev) => prev.filter((n) => n.id !== selected));
     setEdges((prev) => prev.filter(([a, b]) => a !== selected && b !== selected));
     setSelected(null);
@@ -184,8 +220,9 @@ export default function App() {
   };
 
   const deleteEdge = useCallback((from, to) => {
+    pushHistory(nodes, edges);
     setEdges((prev) => prev.filter(([a, b]) => !(a === from && b === to)));
-  }, []);
+  }, [nodes, edges, pushHistory]);
 
   const updateNodeConfig = (nodeId, key, val) => {
     setNodes((prev) =>
@@ -358,13 +395,51 @@ export default function App() {
   // ── Keyboard shortcuts ──────────────────────────────────────
   useEffect(() => {
     if (!user) return;
+    const isInput = (e) => ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
     const onDown = (e) => {
-      if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+      if (e.code === "Space" && !isInput(e)) {
         spaceDown.current = true;
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && selected) {
-        if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      if ((e.key === "Delete" || e.key === "Backspace") && selected && !isInput(e)) {
         deleteSelected();
+      }
+      // Ctrl+Z: 실행 취소
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey && !isInput(e)) {
+        e.preventDefault();
+        undo();
+      }
+      // Ctrl+Shift+Z / Ctrl+Y: 다시 실행
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey)) && !isInput(e)) {
+        e.preventDefault();
+        redo();
+      }
+      // Ctrl+C: 노드 복사
+      if ((e.ctrlKey || e.metaKey) && e.key === "c" && selected && !isInput(e)) {
+        const n = nodes.find(nd => nd.id === selected);
+        if (n) { setClipboard(n); toast.success("노드가 복사됐습니다"); }
+      }
+      // Ctrl+V: 노드 붙여넣기
+      if ((e.ctrlKey || e.metaKey) && e.key === "v" && clipboard && !isInput(e)) {
+        e.preventDefault();
+        pushHistory(nodes, edges);
+        const newId = uid();
+        const newNode = { ...clipboard, id: newId, x: clipboard.x + 50, y: clipboard.y + 50,
+          config: { ...clipboard.config, name: (clipboard.config?.name || "") + " (복사)" } };
+        setNodes(prev => [...prev, newNode]);
+        setSelected(newId);
+      }
+      // Ctrl+D: 선택 노드 복제 (붙여넣기 없이 바로)
+      if ((e.ctrlKey || e.metaKey) && e.key === "d" && selected && !isInput(e)) {
+        e.preventDefault();
+        const n = nodes.find(nd => nd.id === selected);
+        if (n) {
+          pushHistory(nodes, edges);
+          const newId = uid();
+          const newNode = { ...n, id: newId, x: n.x + 50, y: n.y + 50,
+            config: { ...n.config, name: (n.config?.name || "") + " (복사)" } };
+          setNodes(prev => [...prev, newNode]);
+          setSelected(newId);
+        }
       }
       // Ctrl+S: 저장
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -383,7 +458,7 @@ export default function App() {
         setShowShortcuts(false);
       }
       // ?: 단축키 안내
-      if (e.key === "?" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+      if (e.key === "?" && !isInput(e)) {
         setShowShortcuts(v => !v);
       }
     };
@@ -393,7 +468,7 @@ export default function App() {
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
     return () => { window.removeEventListener("keydown", onDown); window.removeEventListener("keyup", onUp); };
-  }, [selected, runState.running, nodes, edges]); // eslint-disable-line
+  }, [selected, runState.running, nodes, edges, clipboard, undo, redo, pushHistory]); // eslint-disable-line
 
   if (!user) return <LandingPage />;
 
@@ -717,6 +792,11 @@ function OnboardingOverlay({ onClose }) {
 
 function ShortcutsOverlay({ onClose }) {
   const shortcuts = [
+    { key: "Ctrl + Z", desc: "실행 취소 (Undo)" },
+    { key: "Ctrl + Y / Ctrl+Shift+Z", desc: "다시 실행 (Redo)" },
+    { key: "Ctrl + C", desc: "선택한 노드 복사" },
+    { key: "Ctrl + V", desc: "복사한 노드 붙여넣기" },
+    { key: "Ctrl + D", desc: "선택한 노드 즉시 복제" },
     { key: "Ctrl + S", desc: "워크플로우 저장" },
     { key: "Ctrl + Enter", desc: "워크플로우 실행" },
     { key: "Delete / Backspace", desc: "선택한 노드 삭제" },

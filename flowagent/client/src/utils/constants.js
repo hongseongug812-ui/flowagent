@@ -1,16 +1,20 @@
 export const NODE_TYPES = {
-  trigger:   { label: "Trigger",    icon: "⚡", color: "#F59E0B", desc: "워크플로우 시작점" },
-  ai_agent:  { label: "AI Agent",   icon: "🤖", color: "#8B5CF6", desc: "LLM 기반 처리" },
-  api_call:  { label: "API Call",   icon: "🔗", color: "#3B82F6", desc: "외부 API 호출" },
-  condition: { label: "조건 분기",   icon: "◇",  color: "#EC4899", desc: "조건에 따라 분기" },
-  transform: { label: "데이터 변환", icon: "⚙",  color: "#10B981", desc: "데이터 가공/변환" },
-  slack:     { label: "Slack",      icon: "💬", color: "#4A154B", desc: "Slack 메시지 전송" },
-  discord:   { label: "Discord",    icon: "🎮", color: "#5865F2", desc: "Discord 메시지 전송" },
-  telegram:  { label: "Telegram",   icon: "✈️", color: "#26A5E4", desc: "Telegram 메시지 전송" },
-  rss_feed:  { label: "RSS 피드",   icon: "📡", color: "#F97316", desc: "RSS/Atom 피드 가져오기" },
-  notion:    { label: "Notion",     icon: "📝", color: "#FFFFFF", desc: "Notion 페이지/DB 생성" },
-  email:     { label: "이메일",     icon: "📧", color: "#F59E0B", desc: "SendGrid로 이메일 발송" },
-  output:    { label: "Output",     icon: "📤", color: "#EF4444", desc: "결과 출력" },
+  trigger:       { label: "Trigger",      icon: "⚡", color: "#F59E0B", desc: "워크플로우 시작점" },
+  ai_agent:      { label: "AI Agent",     icon: "🤖", color: "#8B5CF6", desc: "LLM 기반 처리" },
+  api_call:      { label: "API Call",     icon: "🔗", color: "#3B82F6", desc: "외부 API 호출" },
+  condition:     { label: "조건 분기",     icon: "◇",  color: "#EC4899", desc: "조건에 따라 분기" },
+  transform:     { label: "데이터 변환",   icon: "⚙",  color: "#10B981", desc: "데이터 가공/변환" },
+  filter:        { label: "필터",          icon: "🔍", color: "#06B6D4", desc: "배열 항목 필터링" },
+  loop:          { label: "반복 루프",     icon: "🔄", color: "#14B8A6", desc: "배열 각 항목 처리" },
+  delay:         { label: "대기",          icon: "⏱", color: "#78716C", desc: "N초 대기 후 계속" },
+  http_response: { label: "HTTP 응답",    icon: "↩", color: "#22C55E", desc: "Webhook 호출자에 응답" },
+  slack:         { label: "Slack",        icon: "💬", color: "#4A154B", desc: "Slack 메시지 전송" },
+  discord:       { label: "Discord",      icon: "🎮", color: "#5865F2", desc: "Discord 메시지 전송" },
+  telegram:      { label: "Telegram",     icon: "✈️", color: "#26A5E4", desc: "Telegram 메시지 전송" },
+  rss_feed:      { label: "RSS 피드",     icon: "📡", color: "#F97316", desc: "RSS/Atom 피드 가져오기" },
+  notion:        { label: "Notion",       icon: "📝", color: "#FFFFFF", desc: "Notion 페이지/DB 생성" },
+  email:         { label: "이메일",        icon: "📧", color: "#F59E0B", desc: "SendGrid로 이메일 발송" },
+  output:        { label: "Output",       icon: "📤", color: "#EF4444", desc: "결과 출력" },
 };
 
 export const TEMPLATES = [
@@ -142,6 +146,44 @@ export const TEMPLATES = [
       { id: "d5", type: "email",    x: 880, y: 350, config: { name: "이메일 발송", subject: "일일 리포트", body: "{{input.result}}" } },
     ],
     edges: [["d1","d2"],["d2","d3"],["d3","d4"],["d3","d5"]],
+  },
+
+  // ── 루프/필터 ────────────────────────────────────────────────
+  {
+    name: "RSS → 필터 → Discord",
+    desc: "RSS 피드를 수집해 키워드 필터 후 Discord 전송",
+    category: "필터",
+    nodes: [
+      { id: "lf1", type: "trigger",  x: 80,  y: 200, config: { name: "매시간", triggerType: "schedule", cron: "0 * * * *" } },
+      { id: "lf2", type: "rss_feed", x: 340, y: 200, config: { name: "뉴스 수집", url: "https://feeds.bbci.co.uk/korean/rss.xml", limit: 20 } },
+      { id: "lf3", type: "filter",   x: 600, y: 200, config: { name: "키워드 필터", field: "$.title", operator: "contains", value: "AI" } },
+      { id: "lf4", type: "discord",  x: 860, y: 200, config: { name: "Discord 전송", message: "🔍 필터링된 뉴스 {{input.count}}건\n{{input.items}}" } },
+    ],
+    edges: [["lf1","lf2"],["lf2","lf3"],["lf3","lf4"]],
+  },
+  {
+    name: "배열 루프 처리 → Notion",
+    desc: "RSS 항목을 하나씩 가공해 Notion에 저장",
+    category: "필터",
+    nodes: [
+      { id: "lo1", type: "trigger",  x: 80,  y: 200, config: { name: "수동 실행", triggerType: "manual" } },
+      { id: "lo2", type: "rss_feed", x: 340, y: 200, config: { name: "피드 수집", url: "", limit: 5 } },
+      { id: "lo3", type: "loop",     x: 600, y: 200, config: { name: "항목 가공", code: "return { title: item.title, summary: item.description, date: item.pubDate };" } },
+      { id: "lo4", type: "notion",   x: 880, y: 200, config: { name: "Notion 저장", title: "자동 수집 피드" } },
+    ],
+    edges: [["lo1","lo2"],["lo2","lo3"],["lo3","lo4"]],
+  },
+  {
+    name: "웹훅 수신 → 처리 → 즉시 응답",
+    desc: "웹훅 데이터를 AI 분석 후 호출자에 바로 응답",
+    category: "알림",
+    nodes: [
+      { id: "hr1", type: "trigger",       x: 80,  y: 200, config: { name: "웹훅 수신", triggerType: "webhook" } },
+      { id: "hr2", type: "ai_agent",      x: 360, y: 200, config: { name: "데이터 분석", model: "gpt-4o-mini", prompt: "수신 데이터를 분석하고 간결한 요약을 반환해주세요." } },
+      { id: "hr3", type: "http_response", x: 640, y: 200, config: { name: "응답 반환", status: 200, message: "{{input.result}}" } },
+      { id: "hr4", type: "discord",       x: 640, y: 340, config: { name: "Discord 알림", message: "📥 웹훅 처리 완료\n{{input.result}}" } },
+    ],
+    edges: [["hr1","hr2"],["hr2","hr3"],["hr2","hr4"]],
   },
 
   // ── 모니터링 ─────────────────────────────────────────────────

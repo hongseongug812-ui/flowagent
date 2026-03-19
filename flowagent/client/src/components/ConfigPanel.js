@@ -614,6 +614,156 @@ export default function ConfigPanel({ node, onUpdate, onClose, workflowId }) {
           </>
         )}
 
+        {/* ── FILTER ── */}
+        {node.type === "filter" && (
+          <>
+            <div style={{ fontSize: 11, color: "#555", padding: "8px 10px", background: "#0A1A1F", borderRadius: 6, marginBottom: 12, border: "1px solid #06B6D422" }}>
+              배열(items)에서 조건에 맞는 항목만 통과시킵니다. 이전 노드의 <code style={{ color: "#06B6D4" }}>{"{{input.items}}"}</code> 배열을 사용합니다.
+            </div>
+            <Field label="검사할 필드 (JSONPath)" hint="예: $.title  $.status  $.price">
+              <Input value={node.config?.field} onChange={v => set("field", v)} placeholder="$.title" />
+            </Field>
+            <Field label="조건 연산자">
+              <Select value={node.config?.operator || "contains"} onChange={v => set("operator", v)}>
+                {OPERATORS.map(op => <option key={op.value} value={op.value}>{op.label}</option>)}
+              </Select>
+            </Field>
+            <Field label="비교 값" hint="contains/equals 등에서 사용">
+              <Input value={node.config?.value} onChange={v => set("value", v)} placeholder="AI" />
+            </Field>
+            <div style={{ fontSize: 10, color: "#444", padding: "6px 10px", background: "#111122", borderRadius: 6, marginBottom: 12 }}>
+              출력: <code style={{ color: "#06B6D4" }}>{"{{input.items}}"}</code> — 필터된 배열, <code style={{ color: "#06B6D4" }}>{"{{input.count}}"}</code> — 결과 수
+            </div>
+            <div style={S.divider} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+          </>
+        )}
+
+        {/* ── LOOP ── */}
+        {node.type === "loop" && (
+          <>
+            <div style={{ fontSize: 11, color: "#555", padding: "8px 10px", background: "#0A1F1F", borderRadius: 6, marginBottom: 12, border: "1px solid #14B8A622" }}>
+              배열의 각 항목에 JS 코드를 적용합니다. <code style={{ color: "#14B8A6" }}>item</code>으로 현재 항목, <code style={{ color: "#14B8A6" }}>index</code>로 순서를 사용합니다.
+            </div>
+            <Field label="변환 코드 (JS)" hint="item, index, _ 사용 가능">
+              <Textarea
+                value={node.config?.code}
+                onChange={v => set("code", v)}
+                placeholder={"return {\n  title: item.title,\n  summary: item.description?.slice(0, 100),\n};"}
+                rows={6}
+              />
+            </Field>
+            <div style={{ fontSize: 10, color: "#444", marginBottom: 6, lineHeight: 1.6 }}>
+              유틸: <code style={{ color: "#14B8A6" }}>_.pick(item, ["a","b"])</code> · <code style={{ color: "#14B8A6" }}>_.omit(item, ["x"])</code> · <code style={{ color: "#14B8A6" }}>_.trim(str, 100)</code>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+              {[
+                ["필드 선택", `return _.pick(item, ["title", "link", "pubDate"]);`],
+                ["텍스트 자르기", `return { ...item, description: _.trim(item.description, 150) };`],
+                ["날짜 포맷", `return { ...item, date: _.format(item.pubDate) };`],
+              ].map(([label, code]) => (
+                <button key={label} onClick={() => set("code", code)} style={{
+                  padding: "4px 8px", background: "#0D1F1F", border: "1px solid #14B8A633",
+                  borderRadius: 4, color: "#14B8A6", fontSize: 10, cursor: "pointer", fontFamily: "inherit",
+                }}>{label}</button>
+              ))}
+            </div>
+            <Field label="최대 처리 항목 수" hint="최대 500, 기본 100">
+              <input type="number" min="1" max="500" value={node.config?.limit || 100}
+                onChange={e => set("limit", parseInt(e.target.value))} style={S.input} />
+            </Field>
+            <div style={S.divider} />
+            <TestBtn onClick={runTest} testing={testing} result={testResult} />
+          </>
+        )}
+
+        {/* ── DELAY ── */}
+        {node.type === "delay" && (
+          <>
+            <div style={{ fontSize: 11, color: "#666", padding: "8px 10px", background: "#111122", borderRadius: 6, marginBottom: 12 }}>
+              설정한 시간 동안 대기한 후 다음 노드로 진행합니다. 최대 5분(300초)까지 가능합니다.
+            </div>
+            <Field label="대기 시간 (초)" hint="1 ~ 300초">
+              <input type="number" min="1" max="300" value={node.config?.seconds || 5}
+                onChange={e => set("seconds", parseInt(e.target.value))} style={S.input} />
+            </Field>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+              {[[1,"1초"],[5,"5초"],[10,"10초"],[30,"30초"],[60,"1분"],[120,"2분"],[300,"5분"]].map(([v, l]) => (
+                <button key={v} onClick={() => set("seconds", v)} style={{
+                  padding: "4px 10px", background: node.config?.seconds === v ? "#78716C33" : "none",
+                  border: `1px solid ${node.config?.seconds === v ? "#78716C" : "#333"}`,
+                  borderRadius: 4, color: node.config?.seconds === v ? "#D4D0CB" : "#555",
+                  fontSize: 10, cursor: "pointer", fontFamily: "inherit",
+                }}>{l}</button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── HTTP RESPONSE ── */}
+        {node.type === "http_response" && (
+          <>
+            <div style={{ fontSize: 11, color: "#555", padding: "8px 10px", background: "#0A1F12", borderRadius: 6, marginBottom: 12, border: "1px solid #22C55E22" }}>
+              Webhook 트리거로 실행된 경우 호출자에게 응답을 반환합니다. 응답 내용을 설정하세요.
+            </div>
+            <Field label="HTTP 상태 코드">
+              <Select value={node.config?.status || 200} onChange={v => set("status", parseInt(v))}>
+                <option value={200}>200 OK</option>
+                <option value={201}>201 Created</option>
+                <option value={202}>202 Accepted</option>
+                <option value={400}>400 Bad Request</option>
+                <option value={422}>422 Unprocessable</option>
+                <option value={500}>500 Server Error</option>
+              </Select>
+            </Field>
+            <Field label="응답 메시지" hint="템플릿 변수 사용 가능: {{input.result}}">
+              <Textarea value={node.config?.message} onChange={v => set("message", v)}
+                placeholder="처리가 완료됐습니다: {{input.result}}" rows={3} />
+            </Field>
+            <Field label="입력 데이터 포함 여부">
+              <Select value={node.config?.include_data === false ? "false" : "true"} onChange={v => set("include_data", v === "true")}>
+                <option value="true">포함 (data 필드에 포함)</option>
+                <option value="false">미포함 (message만 반환)</option>
+              </Select>
+            </Field>
+          </>
+        )}
+
+        {/* ── 공통: 재시도 설정 (api_call, ai_agent, rss_feed, notion, email, slack, discord, telegram) ── */}
+        {["api_call", "ai_agent", "rss_feed", "notion", "email", "slack", "discord", "telegram"].includes(node.type) && (
+          <>
+            <div style={S.divider} />
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#666", marginBottom: 8 }}>↺ 오류 재시도 설정</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={S.label}>재시도 횟수</label>
+                <Select value={node.config?.retry_count || 0} onChange={v => set("retry_count", parseInt(v))}>
+                  <option value={0}>재시도 없음</option>
+                  <option value={1}>1회</option>
+                  <option value={2}>2회</option>
+                  <option value={3}>3회</option>
+                </Select>
+              </div>
+              {(node.config?.retry_count || 0) > 0 && (
+                <div style={{ flex: 1 }}>
+                  <label style={S.label}>재시도 간격 (ms)</label>
+                  <Select value={node.config?.retry_delay_ms || 2000} onChange={v => set("retry_delay_ms", parseInt(v))}>
+                    <option value={1000}>1초</option>
+                    <option value={2000}>2초</option>
+                    <option value={5000}>5초</option>
+                    <option value={10000}>10초</option>
+                  </Select>
+                </div>
+              )}
+            </div>
+            {(node.config?.retry_count || 0) > 0 && (
+              <div style={{ fontSize: 10, color: "#444", marginBottom: 12 }}>
+                실패 시 {node.config.retry_count}회 재시도, 간격은 지수적으로 증가합니다
+              </div>
+            )}
+          </>
+        )}
+
         {/* 하단 메타 정보 */}
         <div style={{ marginTop: 8, padding: "8px 10px", background: "#080810", borderRadius: 6, fontSize: 9, color: "#333" }}>
           ID: {node.id} · Type: {node.type} · ({Math.round(node.x)}, {Math.round(node.y)})
